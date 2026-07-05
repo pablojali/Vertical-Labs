@@ -3,9 +3,9 @@ import pandas as pd
 import plotly.graph_objects as go
 
 # 1. Configuración de la interfaz
-st.set_page_config(page_title="Trail NextGen Stats", page_icon="🏃‍♂️", layout="wide")
+st.set_page_config(page_title="Trail Vertical Labs Stats", page_icon="🏃‍♂️", layout="wide")
 
-st.title("🏃‍♂️ Trail Running - NEXT GEN STATS (Beta)")
+st.title("🏃‍♂️ Trail Running - Vertical Labs (Beta)")
 st.markdown("---")
 
 st.sidebar.header("Carga de Datos")
