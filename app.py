@@ -6,18 +6,20 @@ import gpxpy
 # 1. Configuración de la interfaz estilo VertLabs
 st.set_page_config(page_title="VertLabs - Trail Analytics", page_icon="🏃‍♂️", layout="wide")
 
-st.title("🏃‍♂️ VertLabs - Trail Running Analytics")
+st.title("🏃‍♂️ VertLabs - Motor de Segmentación Geométrica")
 st.markdown("---")
 
-# 2. Barra lateral para la carga del archivo GPX real
-st.sidebar.header("⚙️ Entrada de Datos Genéricos")
+# Barra lateral para la carga
+st.sidebar.header("⚙️ Entrada de Datos")
 archivo_gpx = st.sidebar.file_uploader("Subir track de la carrera (.gpx)", type=["gpx"])
 
-st.sidebar.markdown("---")
-st.sidebar.write("Subí el mapa de tu carrera (ej. Saint-Jacques) para inicializar el análisis topográfico.")
+# Umbrales configurables para hacerlo 100% genérico
+st.sidebar.markdown("### Ajuste de Índices Universales")
+umbral_subida = st.sidebar.slider("Umbral IEPE - Subida Muro (%)", 10, 25, 15)
+umbral_bajada = st.sidebar.slider("Umbral TDE - Bajada Crítica (%)", -25, -5, -12)
 
-# 3. Función del Motor Geométrico para procesar el GPX
-def procesar_gpx(file):
+# 2. Función del Motor Geométrico mejorada
+def procesar_gpx_avanzado(file):
     gpx = gpxpy.parse(file)
     puntos_datos = []
     distancia_acumulada = 0.0
@@ -27,12 +29,11 @@ def procesar_gpx(file):
         for segment in track.segments:
             for punto in segment.points:
                 if punto_previo:
-                    # Calcular distancia en metros entre puntos consecutivos
                     dist = punto.distance_2d(punto_previo)
                     distancia_acumulada += dist
                     
-                    # Calcular pendiente instantánea (%)
                     desnivel = punto.elevation - punto_previo.elevation
+                    # Evitar divisiones por cero en puntos idénticos
                     pendiente = (desnivel / dist) * 100 if dist > 0 else 0
                     
                     puntos_datos.append({
@@ -43,49 +44,73 @@ def procesar_gpx(file):
                 punto_previo = punto
     return pd.DataFrame(puntos_datos)
 
-# 4. Flujo lógico de la aplicación según la carga
+# 3. Lógica principal
 if archivo_gpx is not None:
-    st.success("¡Archivo GPX procesado correctamente por el motor de VertLabs!")
+    df_gpx = procesar_gpx_avanzado(archivo_gpx)
     
-    # Procesar datos reales
-    df_gpx = procesar_gpx(archivo_gpx)
+    # Clasificación geométrica de cada punto del sendero
+    def clasificar_terreno(row):
+        if row["Pendiente (%)"] >= umbral_subida:
+            return "Muro Subida (IEPE)"
+        elif row["Pendiente (%)"] <= umbral_bajada:
+            return "Bajada Crítica (TDE)"
+        else:
+            return "Terreno Mixto / Llano"
+            
+    df_gpx["Tipo Terreno"] = df_gpx.apply(clasificar_terreno, axis=1)
     
-    # Mostrar resumen básico extraído geométricamente
+    # Métricas resumen extraídas
     total_km = df_gpx["Distancia (km)"].max()
-    max_alt = df_gpx["Altitud (m)"].max()
-    min_alt = df_gpx["Altitud (m)"].min()
+    km_muro = df_gpx[df_gpx["Tipo Terreno"] == "Muro Subida (IEPE)"].shape[0] * (total_km / len(df_gpx))
+    km_bajada = df_gpx[df_gpx["Tipo Terreno"] == "Bajada Crítica (TDE)"].shape[0] * (total_km / len(df_gpx))
     
     col1, col2, col3 = st.columns(3)
-    col1.metric("Distancia Geométrica Total", f"{total_km:.2f} km")
-    col2.metric("Altitud Máxima", f"{max_alt:.0f} msnm")
-    col3.metric("Altitud Mínima", f"{min_alt:.0f} msnm")
+    col1.metric("Distancia Total", f"{total_km:.2f} km")
+    col2.metric("Total Muros Escaneados (>15%)", f"{km_muro:.2f} km")
+    col3.metric("Total Bajadas Críticas (<-12%)", f"{km_bajada:.2f} km")
     
-    # 5. Renderizar perfil de altimetría real e interactivo
+    # 4. Renderizar Gráfica con Clasificación de Colores Multi-Capa
     st.markdown("---")
-    st.subheader("📈 Perfil Altimétrico Real de la Carrera")
+    st.subheader("📈 Mapa de Esfuerzo Biomecánico del Relieve")
+    st.write("El motor ha aislado los tramos genéricos de la carrera basados exclusivamente en la inclinación física:")
     
     fig = go.Figure()
+    
+    # Capa base: El relieve completo en gris oscuro
     fig.add_trace(go.Scatter(
-        x=df_gpx["Distancia (km)"], 
-        y=df_gpx["Altitud (m)"],
-        mode='lines',
-        name='Relieve',
-        line=dict(color='#00ffcc', width=2),
-        fill='tozeroy',
-        fillcolor='rgba(0, 255, 220, 0.1)'
+        x=df_gpx["Distancia (km)"], y=df_gpx["Altitud (m)"],
+        mode='lines', name='Perfil Base',
+        line=dict(color='#444444', width=1.5)
+    ))
+    
+    # Resaltar en Rojo: Zonas IEPE
+    df_muros = df_gpx.copy()
+    df_muros.loc[df_muros["Tipo Terreno"] != "Muro Subida (IEPE)", "Altitud (m)"] = None
+    fig.add_trace(go.Scatter(
+        x=df_muros["Distancia (km)"], y=df_muros["Altitud (m)"],
+        mode='lines', name='Zonas de Power Hiking (IEPE)',
+        line=dict(color='#ff4b4b', width=3.5)
+    ))
+    
+    # Resaltar en Azul: Zonas TDE
+    df_bajadas = df_gpx.copy()
+    df_bajadas.loc[df_bajadas["Tipo Terreno"] != "Bajada Crítica (TDE)", "Altitud (m)"] = None
+    fig.add_trace(go.Scatter(
+        x=df_bajadas["Distancia (km)"], y=df_bajadas["Altitud (m)"],
+        mode='lines', name='Zonas Daño Cuádriceps (TDE)',
+        line=dict(color='#00bfff', width=3.5)
     ))
     
     fig.update_layout(
         template="plotly_dark",
-        xaxis_title="Distancia Recorrida (Kilómetros)",
-        yaxis_title="Altitud sobre el nivel del mar (Metros)",
-        height=400,
-        hovermode="x"
+        xaxis_title="Distancia (Kilómetros)",
+        yaxis_title="Altitud (Metros)",
+        height=450,
+        hovermode="x unified"
     )
     st.plotly_chart(fig, use_container_width=True)
     
-    # Guardamos el DataFrame en el estado de la sesión para los siguientes pasos
-    st.session_state['df_gpx'] = df_gpx
-
+    # Guardamos el DataFrame enriquecido
+    st.session_state['df_gpx_analytics'] = df_gpx
 else:
-    st.info("👋 ¡Bienvenido a VertLabs! Por favor, carga un archivo `.gpx` en el menú lateral para ver la altimetría real e iniciar el cálculo de los índices.")
+    st.info("👋 El escáner geométrico está listo. Cargá el GPX de tu carrera en la barra lateral para identificar los sectores críticos.")
