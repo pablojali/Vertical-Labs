@@ -1,0 +1,31 @@
+{
+  "atleta": "Santos Gabriel Rueda",
+  "carrera": "Val d'Aran by UTMB 2026 - 100M",
+  "resultado_final": "01",
+  "tiempo_meta": "21:32:05", 
+  "splits": [
+    {"checkpoint": "Salida", "km": 0.0, "Speed km/h": 0,"tiempo_acumulado_minutos": 0},
+    {"checkpoint": "Bassa d'Oles", "km": 10.5, "Speed km/h": 7,"tiempo_acumulado_minutos": 88.86},
+    {"checkpoint": "Artiga de Lin", "km": 24.6, "Speed km/h": 9,"tiempo_acumulado_minutos": 182.13},
+    {"checkpoint": "Poilaner", "km": 33, "Speed km/h": 5.7,"tiempo_acumulado_minutos": 269.23},
+    {"checkpoint": "Coth de Baretja", "km": 39.5, "Speed km/h": 6.9,"tiempo_acumulado_minutos": 325.78}
+    {"checkpoint": "Portilhon", "km": 42.6, "Speed km/h": 9.7,"tiempo_acumulado_minutos": 344.98}
+    {"checkpoint": "Bossòst", "km": 49.2, "Speed km/h": 10,"tiempo_acumulado_minutos": 384.33}
+    {"checkpoint": "Canejan", "km": 58.2, "Speed km/h": 8.4,"tiempo_acumulado_minutos": 448.53}
+    {"checkpoint": "Refugi Honeria", "km": 65.6, "Speed km/h": 8.3,"tiempo_acumulado_minutos": 502.18}
+    {"checkpoint": "Minesde Liat", "km": 75.7, "Speed km/h": 6.3,"tiempo_acumulado_minutos": 620.53}
+    {"checkpoint": "Còth de Varradòs", "km": 81.7, "Speed km/h": 8.9,"tiempo_acumulado_minutos": 663.02}
+    {"checkpoint": "Port d'Urets", "km": 90.2, "Speed km/h": 7.3,"tiempo_acumulado_minutos": 743.25}
+    {"checkpoint": "Montgarri", "km": 99.6, "Speed km/h": 10.9,"tiempo_acumulado_minutos": 1264}
+    {"checkpoint": "Beret", "km": 104.7, "Speed km/h": 7.3,"tiempo_acumulado_minutos": 1264}
+    {"checkpoint": "Salardú", "km": 113.6, "Speed km/h": 10.9,"tiempo_acumulado_minutos": 1264}
+    {"checkpoint": "Banhs de Tredòs", "km": 122.4, "Speed km/h": 7.9,"tiempo_acumulado_minutos": 1264}
+    {"checkpoint": "Estanh Obago", "km": 129.2, "Speed km/h": 6.6,"tiempo_acumulado_minutos": 1264}
+    {"checkpoint": "Colomèrs", "km": 134, "Speed km/h": 7.3,"tiempo_acumulado_minutos": 1264}
+    {"checkpoint": "Mont-Romies", "km": 144.3, "Speed km/h": 9.8,"tiempo_acumulado_minutos": 1264}
+    {"checkpoint": "Arties", "km": 148.8, "Speed km/h": 10.2,"tiempo_acumulado_minutos": 1264}
+    {"checkpoint": "Santet Escunhau", "km": 154.3, "Speed km/h": 5.1,"tiempo_acumulado_minutos": 1264}
+    {"checkpoint": "Tuc Meddia", "km": 156.2, "Speed km/h": 4,"tiempo_acumulado_minutos": 1264}
+    {"checkpoint": "Vielha", "km": 163.1, "Speed km/h": 10.3,"tiempo_acumulado_minutos": 1264}
+  ]
+}
