@@ -72,6 +72,18 @@ def extraer_id_corredor(url):
     return match.group(1) if match else None
 
 
+def extraer_tenant(url):
+    """Extrae 'carrera_año' desde una URL tipo
+    https://live.utmb.world/aranbyutmb/2026/runners/5 -> 'aranbyutmb_2026'
+    La API lo exige como header X-Tenant para saber a qué edición
+    de la carrera pertenece el corredor."""
+    match = re.search(r"live\.utmb\.world/([a-zA-Z0-9]+)/(\d{4})/runners/", url)
+    if match:
+        carrera, anio = match.groups()
+        return f"{carrera}_{anio}"
+    return None
+
+
 def scrapear_tiempos_paso(url):
     corredor_id = extraer_id_corredor(url)
     if not corredor_id:
@@ -81,8 +93,22 @@ def scrapear_tiempos_paso(url):
             "(ej: https://live.utmb.world/aranbyutmb/2026/runners/5)."
         )
 
+    tenant = extraer_tenant(url)
+    if not tenant:
+        raise ValueError(
+            "No pude identificar la carrera/año en esa URL. "
+            "Verificá que tenga el formato "
+            "'https://live.utmb.world/<carrera>/<año>/runners/<numero>'."
+        )
+
     api_url = f"https://utmblive-api.utmb.world/runners/{corredor_id}?locale=en"
-    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
+        "Accept": "*/*",
+        "Origin": "https://live.utmb.world",
+        "Referer": "https://live.utmb.world/",
+        "X-Tenant": tenant,
+    }
 
     respuesta = requests.get(api_url, headers=headers, timeout=15)
     respuesta.raise_for_status()
