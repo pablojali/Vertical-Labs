@@ -2,33 +2,9 @@ import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
 import gpxpy
-import json
-import subprocess
-import sys
+import re
 import traceback
-from io import StringIO
-from playwright.sync_api import sync_playwright
-
-
-@st.cache_resource
-def _asegurar_chromium_instalado():
-    """Streamlit Community Cloud no corre 'playwright install' automáticamente
-    (solo instala requirements.txt y packages.txt). Lo forzamos nosotros la
-    primera vez que arranca la app. @st.cache_resource hace que esto se
-    ejecute una sola vez por instancia, no en cada refresco de la página."""
-    try:
-        subprocess.run(
-            [sys.executable, "-m", "playwright", "install", "chromium"],
-            check=True,
-            capture_output=True,
-            text=True,
-        )
-    except subprocess.CalledProcessError as e:
-        st.sidebar.error(f"No se pudo instalar Chromium para Playwright: {e.stderr}")
-    return True
-
-
-_asegurar_chromium_instalado()
+import requests
 
 # 1. Configuración de la interfaz estilo VertLabs
 st.set_page_config(page_title="VertLabs - Trail Analytics", page_icon="🏃‍♂️", layout="wide")
@@ -47,8 +23,8 @@ umbral_bajada = -12
 # NUEVO: Sección de Scraping Automatizado para Redes Sociales
 st.sidebar.markdown("---")
 st.sidebar.header("📊 Datos de Rendimiento (Post-Carrera)")
-url_corredor = st.sidebar.text_input("2. Pegar Link del Corredor (UTMB Live / LiveTrail)", 
-                                     placeholder="https://livetrail.net/...")
+url_corredor = st.sidebar.text_input("2. Pegar Link del Corredor (UTMB Live)", 
+                                     placeholder="https://live.utmb.world/aranbyutmb/2026/runners/5")
 boton_cargar = st.sidebar.button("🔍 Cargar datos del corredor", use_container_width=True)
 
 st.sidebar.markdown("---")
@@ -81,83 +57,60 @@ def procesar_gpx_avanzado(file):
     return pd.DataFrame(puntos_datos)
 
 # NUEVA FUNCIÓN: Web Scraping automático de tablas de cronometraje
-# IMPORTANTE: sitios como UTMB Live / LiveTrail son apps React/Next.js.
-# El HTML que devuelve el servidor está vacío ("Loading...") y los datos
-# se piden después por JavaScript a una API interna en formato JSON.
-# Por eso pd.read_html(url) nunca encontraba tablas: no hay <table> en el HTML crudo.
-#
-# La solución: abrir la página con un navegador headless (Playwright),
-# dejar que se ejecute el JS, e interceptar las respuestas JSON que la
-# propia app pide para pintar los datos del corredor.
+# La página live.utmb.world es una app Next.js: el HTML que devuelve el
+# servidor llega vacío y los datos se piden por JS a una API interna.
+# Gracias a inspeccionar el Network tab del navegador, encontramos el
+# endpoint real que usa la propia web:
+#   https://utmblive-api.utmb.world/runners/<ID>?locale=en
+# Con esto alcanza un simple requests.get(): no hace falta navegador,
+# no hace falta Playwright/Chromium ni packages.txt.
 
-def _buscar_listas_de_diccionarios(obj, encontradas=None):
-    """Recorre un JSON (dict/list anidado) y junta todas las listas de
-    diccionarios que encuentre, para detectar automáticamente cuál es la
-    que contiene los splits/resultados del corredor."""
-    if encontradas is None:
-        encontradas = []
-    if isinstance(obj, list):
-        if obj and all(isinstance(item, dict) for item in obj):
-            encontradas.append(obj)
-        for item in obj:
-            _buscar_listas_de_diccionarios(item, encontradas)
-    elif isinstance(obj, dict):
-        for value in obj.values():
-            _buscar_listas_de_diccionarios(value, encontradas)
-    return encontradas
+def extraer_id_corredor(url):
+    """Extrae el ID numérico del corredor desde una URL tipo
+    https://live.utmb.world/aranbyutmb/2026/runners/5"""
+    match = re.search(r"/runners/(\d+)", url)
+    return match.group(1) if match else None
 
 
 def scrapear_tiempos_paso(url):
-    respuestas_json = []
+    corredor_id = extraer_id_corredor(url)
+    if not corredor_id:
+        raise ValueError(
+            "No pude encontrar el ID del corredor en esa URL. "
+            "Verificá que tenga el formato '.../runners/<numero>' "
+            "(ej: https://live.utmb.world/aranbyutmb/2026/runners/5)."
+        )
 
-    def capturar_respuesta(response):
-        try:
-            content_type = response.headers.get("content-type", "")
-            if "application/json" in content_type:
-                respuestas_json.append(response.json())
-        except Exception:
-            pass  # respuestas que no son JSON válido (imágenes, css, etc.)
+    api_url = f"https://utmblive-api.utmb.world/runners/{corredor_id}?locale=en"
+    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
 
-    html_renderizado = None
-    with sync_playwright() as p:
-        navegador = p.chromium.launch(headless=True)
-        pagina = navegador.new_page()
-        pagina.on("response", capturar_respuesta)
+    respuesta = requests.get(api_url, headers=headers, timeout=15)
+    respuesta.raise_for_status()
+    data = respuesta.json()
 
-        pagina.goto(url, wait_until="networkidle", timeout=30000)
-        # Pequeño margen extra para llamadas asíncronas tardías
-        pagina.wait_for_timeout(2000)
+    resume = data.get("resume", {}) or {}
+    info = resume.get("info", {}) or {}
+    ranking = resume.get("ranking", {}) or {}
+    pais = data.get("country", {}) or {}
 
-        html_renderizado = pagina.content()
-        navegador.close()
+    info_general = {
+        "Nombre": info.get("fullname"),
+        "Dorsal": resume.get("bib"),
+        "Edad": info.get("age"),
+        "Categoría": info.get("category"),
+        "Club": info.get("club"),
+        "País": pais.get("name"),
+        "Tiempo Final": resume.get("raceTime"),
+        "Puesto Scratch": ranking.get("scratch"),
+        "Puesto Sexo": ranking.get("sex"),
+        "Puesto Categoría": ranking.get("category"),
+        "Estado": resume.get("status"),
+    }
 
-    # 1) Buscar en las respuestas JSON capturadas la lista de diccionarios
-    #    más "grande" (normalmente es la tabla de splits/resultados)
-    candidatas = []
-    for data in respuestas_json:
-        candidatas.extend(_buscar_listas_de_diccionarios(data))
+    passings = (data.get("detail", {}) or {}).get("passings", []) or []
+    df_passings = pd.DataFrame(passings)
 
-    if candidatas:
-        mejor_lista = max(candidatas, key=len)
-        df = pd.DataFrame(mejor_lista)
-        if not df.empty:
-            return df
-
-    # 2) Respaldo: si no hubo JSON útil, intentar leer tablas del HTML
-    #    ya renderizado (por si la web sí pinta una <table> real en el DOM)
-    if html_renderizado:
-        try:
-            tablas = pd.read_html(StringIO(html_renderizado))
-            for df in tablas:
-                columnas_str = " ".join(df.columns.astype(str)).lower()
-                if "clt" in columnas_str or "pass" in columnas_str or "tps" in columnas_str or "km" in columnas_str:
-                    return df
-            if tablas:
-                return tablas[0]
-        except ValueError:
-            pass  # no había ninguna tabla ni siquiera en el HTML renderizado
-
-    return None
+    return info_general, df_passings
 
 # 3. Lógica principal
 if archivo_gpx is not None:
@@ -240,12 +193,12 @@ if boton_cargar:
     if not url_corredor:
         st.warning("Pegá primero un link válido en la barra lateral antes de hacer clic en el botón.")
     else:
-        with st.spinner("Conectando con la plataforma de cronometraje (esto puede tardar 10-20 seg)..."):
+        with st.spinner("Conectando con la plataforma de cronometraje..."):
             try:
-                df_atleta = scrapear_tiempos_paso(url_corredor)
+                info_general, df_atleta = scrapear_tiempos_paso(url_corredor)
                 error_detalle = None
             except Exception:
-                df_atleta = None
+                info_general, df_atleta = None, None
                 error_detalle = traceback.format_exc()
 
         # --- Ventana de feedback ---
@@ -260,4 +213,16 @@ if boton_cargar:
             )
         else:
             st.success("✅ ¡Datos del corredor obtenidos con éxito!")
+
+            # Ficha del corredor
+            c1, c2, c3, c4 = st.columns(4)
+            c1.metric("Corredor", info_general.get("Nombre") or "-")
+            c2.metric("Tiempo Final", info_general.get("Tiempo Final") or "-")
+            c3.metric("Puesto Scratch", info_general.get("Puesto Scratch") or "-")
+            c4.metric("Categoría", info_general.get("Categoría") or "-")
+
+            with st.expander("Ver ficha completa del corredor"):
+                st.json(info_general)
+
+            st.markdown("##### Checkpoints / Tiempos de paso")
             st.dataframe(df_atleta, use_container_width=True)

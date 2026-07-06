@@ -4,4 +4,4 @@ gpxpy
 lxml
 html5lib
 beautifulsoup4
-playwright
+
