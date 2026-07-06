@@ -5,6 +5,7 @@ import gpxpy
 import json
 import subprocess
 import sys
+import traceback
 from io import StringIO
 from playwright.sync_api import sync_playwright
 
@@ -39,17 +40,19 @@ st.markdown("---")
 st.sidebar.header("⚙️ Entrada de Datos")
 archivo_gpx = st.sidebar.file_uploader("1. Subir track de la carrera (.gpx)", type=["gpx"])
 
+# Umbrales fijos (antes eran sliders). Se hardcodean para simplificar la app.
+umbral_subida = 15
+umbral_bajada = -12
+
 # NUEVO: Sección de Scraping Automatizado para Redes Sociales
 st.sidebar.markdown("---")
 st.sidebar.header("📊 Datos de Rendimiento (Post-Carrera)")
 url_corredor = st.sidebar.text_input("2. Pegar Link del Corredor (UTMB Live / LiveTrail)", 
                                      placeholder="https://livetrail.net/...")
+boton_cargar = st.sidebar.button("🔍 Cargar datos del corredor", use_container_width=True)
 
-# Umbrales configurables para hacerlo 100% genérico
 st.sidebar.markdown("---")
-st.sidebar.markdown("### Ajuste de Índices Universales")
-umbral_subida = st.sidebar.slider("Umbral IEPE - Subida Muro (%)", 10, 25, 15)
-umbral_bajada = st.sidebar.slider("Umbral TDE - Bajada Crítica (%)", -25, -5, -12)
+st.sidebar.caption(f"Umbral IEPE (subida): {umbral_subida}% · Umbral TDE (bajada): {umbral_bajada}%")
 
 # 2. Función del Motor Geométrico mejorada
 def procesar_gpx_avanzado(file):
@@ -116,21 +119,17 @@ def scrapear_tiempos_paso(url):
             pass  # respuestas que no son JSON válido (imágenes, css, etc.)
 
     html_renderizado = None
-    try:
-        with sync_playwright() as p:
-            navegador = p.chromium.launch(headless=True)
-            pagina = navegador.new_page()
-            pagina.on("response", capturar_respuesta)
+    with sync_playwright() as p:
+        navegador = p.chromium.launch(headless=True)
+        pagina = navegador.new_page()
+        pagina.on("response", capturar_respuesta)
 
-            pagina.goto(url, wait_until="networkidle", timeout=30000)
-            # Pequeño margen extra para llamadas asíncronas tardías
-            pagina.wait_for_timeout(2000)
+        pagina.goto(url, wait_until="networkidle", timeout=30000)
+        # Pequeño margen extra para llamadas asíncronas tardías
+        pagina.wait_for_timeout(2000)
 
-            html_renderizado = pagina.content()
-            navegador.close()
-    except Exception as e:
-        st.sidebar.error(f"Error al abrir la página con el navegador: {e}")
-        return None
+        html_renderizado = pagina.content()
+        navegador.close()
 
     # 1) Buscar en las respuestas JSON capturadas la lista de diccionarios
     #    más "grande" (normalmente es la tabla de splits/resultados)
@@ -229,31 +228,36 @@ if archivo_gpx is not None:
     # Guardamos el DataFrame enriquecido
     st.session_state['df_gpx_analytics'] = df_gpx
 
-    # NUEVO: Bloque de procesamiento del Atleta via Scraping
-    if url_corredor:
-        st.markdown("---")
-        st.subheader("⏱️ Telemetría Oficial del Corredor Extraída por Scraping")
-        
-        with st.spinner("Conectando con la plataforma de cronometraje..."):
-            df_atleta = scrapear_tiempos_paso(url_corredor)
-        
-        if df_atleta is not None:
-            st.success("¡Tabla de tiempos de paso obtenida con éxito y sin transcribir nada a mano!")
-            
-            # Mostramos las métricas crudas para validar
-            col_tabla, col_info = st.columns([2, 1])
-            with col_tabla:
-                st.dataframe(df_atleta, use_container_width=True)
-            
-            with col_info:
-                st.markdown("💡 **Siguiente Paso para tus Post de Redes:**")
-                st.info(
-                    "Tu backend ya tiene el relieve por metro (GPX) y los checkpoints con sus tiempos "
-                    "reales. Ahora tu algoritmo puede cruzar los km de esta tabla con los km del GPX "
-                    "para aislar matemáticamente los ritmos en los muros (IEPE) y las bajadas (TDE)."
-                )
-        else:
-            st.warning("No pudimos extraer una tabla válida de ese enlace. Verifica que sea la URL directa del perfil del corredor de la carrera.")
-
 else:
     st.info("👋 El escáner geométrico está listo. Cargá el GPX de tu carrera en la barra lateral para identificar los sectores críticos.")
+
+# NUEVO: Bloque de procesamiento del Atleta vía Scraping.
+# Independiente del GPX: se dispara solo al hacer clic en el botón.
+if boton_cargar:
+    st.markdown("---")
+    st.subheader("⏱️ Telemetría Oficial del Corredor Extraída por Scraping")
+
+    if not url_corredor:
+        st.warning("Pegá primero un link válido en la barra lateral antes de hacer clic en el botón.")
+    else:
+        with st.spinner("Conectando con la plataforma de cronometraje (esto puede tardar 10-20 seg)..."):
+            try:
+                df_atleta = scrapear_tiempos_paso(url_corredor)
+                error_detalle = None
+            except Exception:
+                df_atleta = None
+                error_detalle = traceback.format_exc()
+
+        # --- Ventana de feedback ---
+        if error_detalle:
+            st.error("❌ Ocurrió un error al intentar obtener los datos del corredor.")
+            with st.expander("Ver detalle técnico del error"):
+                st.code(error_detalle, language="python")
+        elif df_atleta is None or df_atleta.empty:
+            st.warning(
+                "⚠️ No se encontró ninguna tabla de datos en ese enlace. "
+                "Verificá que sea la URL directa del perfil del corredor."
+            )
+        else:
+            st.success("✅ ¡Datos del corredor obtenidos con éxito!")
+            st.dataframe(df_atleta, use_container_width=True)
