@@ -10,22 +10,25 @@ st.title("🏃‍♂️ VertLabs - Motor de Segmentación Geométrica")
 st.markdown("---")
 
 # Barra lateral para la carga
-st.sidebar.header("⚙️ Entrada de Datos")
-archivo_gpx = st.sidebar.file_uploader("1. Subir track de la carrera (.gpx)", type=["gpx"])
+st.sidebar.header("⚙️ 1. Entrada Topográfica")
+archivo_gpx = st.sidebar.file_uploader("Subir track de la carrera (.gpx)", type=["gpx"])
 
-# NUEVO: Sección de Scraping Automatizado para Redes Sociales
+# Sección de Scraping Automatizado
 st.sidebar.markdown("---")
-st.sidebar.header("📊 Datos de Rendimiento (Post-Carrera)")
-url_corredor = st.sidebar.text_input("2. Pegar Link del Corredor (UTMB Live / LiveTrail)", 
-                                     placeholder="https://livetrail.net/...")
+st.sidebar.header("📊 2. Datos de Rendimiento")
+url_corredor = st.sidebar.text_input("Pegar Link del Corredor (UTMB Live / LiveTrail)", 
+                                     placeholder="https://live.utmb.world/...")
 
-# Umbrales configurables para hacerlo 100% genérico
-st.sidebar.markdown("---")
-st.sidebar.markdown("### Ajuste de Índices Universales")
-umbral_subida = st.sidebar.slider("Umbral IEPE - Subida Muro (%)", 10, 25, 15)
-umbral_bajada = st.sidebar.slider("Umbral TDE - Bajada Crítica (%)", -25, -5, -12)
+# NUEVO: Botón explícito para accionar la extracción
+btn_scraping = st.sidebar.button("Extraer Tiempos 🚀")
 
-# 2. Función del Motor Geométrico mejorada
+# ---------------------------------------------------------
+# AJUSTE ESTRATÉGICO: Índices Universales Hardcodeados al 12%
+# ---------------------------------------------------------
+UMBRAL_SUBIDA = 12.0
+UMBRAL_BAJADA = -12.0
+
+# Función del Motor Geométrico
 def procesar_gpx_avanzado(file):
     gpx = gpxpy.parse(file)
     puntos_datos = []
@@ -40,7 +43,6 @@ def procesar_gpx_avanzado(file):
                     distancia_acumulada += dist
                     
                     desnivel = punto.elevation - punto_previo.elevation
-                    # Evitar divisiones por cero en puntos idénticos
                     pendiente = (desnivel / dist) * 100 if dist > 0 else 0
                     
                     puntos_datos.append({
@@ -51,15 +53,14 @@ def procesar_gpx_avanzado(file):
                 punto_previo = punto
     return pd.DataFrame(puntos_datos)
 
-# NUEVA FUNCIÓN: Web Scraping automático de tablas de cronometraje
+# Función de Web Scraping automático
 def scrapear_tiempos_paso(url):
     try:
-        # pd.read_html lee todas las tablas de una página web usando requests por detrás
+        # pd.read_html lee todas las tablas de una página web en un solo paso
         tablas = pd.read_html(url)
         if not tablas:
             return None
         
-        # En la mayoría de los lives de LiveTrail/UTMB, la tabla principal es la primera [0] o segunda [1]
         # Buscamos la tabla que contenga palabras clave típicas de cronometraje
         for df in tablas:
             columnas_str = " ".join(df.columns.astype(str)).lower()
@@ -67,49 +68,57 @@ def scrapear_tiempos_paso(url):
                 return df
         return tablas[0]
     except Exception as e:
-        st.sidebar.error(f"Error al scrapear el link: {e}")
+        st.sidebar.error(f"Error al scrapear el link: Verifica que sea público. Detalle: {e}")
         return None
 
-# 3. Lógica principal
+# Lógica del botón de Scraping (Guardamos en Session State para no perderlo)
+if btn_scraping and url_corredor:
+    with st.spinner("Conectando con la plataforma de cronometraje..."):
+        df_atleta = scrapear_tiempos_paso(url_corredor)
+        if df_atleta is not None:
+            st.session_state['df_atleta'] = df_atleta
+        else:
+            st.sidebar.warning("No pudimos extraer una tabla válida de ese enlace.")
+
+# 3. Lógica principal del Relieve
 if archivo_gpx is not None:
     df_gpx = procesar_gpx_avanzado(archivo_gpx)
     
-    # Clasificación geométrica de cada punto del sendero
+    # Clasificación geométrica estandarizada al 12%
     def clasificar_terreno(row):
-        if row["Pendiente (%)"] >= umbral_subida:
+        if row["Pendiente (%)"] >= UMBRAL_SUBIDA:
             return "Muro Subida (IEPE)"
-        elif row["Pendiente (%)"] <= umbral_bajada:
+        elif row["Pendiente (%)"] <= UMBRAL_BAJADA:
             return "Bajada Crítica (TDE)"
         else:
             return "Terreno Mixto / Llano"
             
     df_gpx["Tipo Terreno"] = df_gpx.apply(clasificar_terreno, axis=1)
     
-    # Métricas resumen extraídas
+    # Métricas resumen
     total_km = df_gpx["Distancia (km)"].max()
     km_muro = df_gpx[df_gpx["Tipo Terreno"] == "Muro Subida (IEPE)"].shape[0] * (total_km / len(df_gpx))
     km_bajada = df_gpx[df_gpx["Tipo Terreno"] == "Bajada Crítica (TDE)"].shape[0] * (total_km / len(df_gpx))
     
     col1, col2, col3 = st.columns(3)
     col1.metric("Distancia Total", f"{total_km:.2f} km")
-    col2.metric("Total Muros Escaneados (>15%)", f"{km_muro:.2f} km")
+    col2.metric("Total Muros Escaneados (>12%)", f"{km_muro:.2f} km")
     col3.metric("Total Bajadas Críticas (<-12%)", f"{km_bajada:.2f} km")
     
-    # 4. Renderizar Gráfica con Clasificación de Colores Multi-Capa
+    # Renderizar Gráfica
     st.markdown("---")
     st.subheader("📈 Mapa de Esfuerzo Biomecánico del Relieve")
-    st.write("El motor ha aislado los tramos genéricos de la carrera basados exclusivamente en la inclinación física:")
     
     fig = go.Figure()
     
-    # Capa base: El relieve completo en gris oscuro
+    # Capa base: Relieve gris
     fig.add_trace(go.Scatter(
         x=df_gpx["Distancia (km)"], y=df_gpx["Altitud (m)"],
         mode='lines', name='Perfil Base',
         line=dict(color='#444444', width=1.5)
     ))
     
-    # Resaltar en Rojo: Zonas IEPE
+    # Capa Roja: Zonas IEPE (>12%)
     df_muros = df_gpx.copy()
     df_muros.loc[df_muros["Tipo Terreno"] != "Muro Subida (IEPE)", "Altitud (m)"] = None
     fig.add_trace(go.Scatter(
@@ -118,7 +127,7 @@ if archivo_gpx is not None:
         line=dict(color='#ff4b4b', width=3.5)
     ))
     
-    # Resaltar en Azul: Zonas TDE
+    # Capa Azul: Zonas TDE (<-12%)
     df_bajadas = df_gpx.copy()
     df_bajadas.loc[df_bajadas["Tipo Terreno"] != "Bajada Crítica (TDE)", "Altitud (m)"] = None
     fig.add_trace(go.Scatter(
@@ -135,35 +144,26 @@ if archivo_gpx is not None:
         hovermode="x unified"
     )
     st.plotly_chart(fig, use_container_width=True)
-    
-    # Guardamos el DataFrame enriquecido
-    st.session_state['df_gpx_analytics'] = df_gpx
-
-    # NUEVO: Bloque de procesamiento del Atleta via Scraping
-    if url_corredor:
-        st.markdown("---")
-        st.subheader("⏱️ Telemetría Oficial del Corredor Extraída por Scraping")
-        
-        with st.spinner("Conectando con la plataforma de cronometraje..."):
-            df_atleta = scrapear_tiempos_paso(url_corredor)
-        
-        if df_atleta is not None:
-            st.success("¡Tabla de tiempos de paso obtenida con éxito y sin transcribir nada a mano!")
-            
-            # Mostramos las métricas crudas para validar
-            col_tabla, col_info = st.columns([2, 1])
-            with col_tabla:
-                st.dataframe(df_atleta, use_container_width=True)
-            
-            with col_info:
-                st.markdown("💡 **Siguiente Paso para tus Post de Redes:**")
-                st.info(
-                    "Tu backend ya tiene el relieve por metro (GPX) y los checkpoints con sus tiempos "
-                    "reales. Ahora tu algoritmo puede cruzar los km de esta tabla con los km del GPX "
-                    "para aislar matemáticamente los ritmos en los muros (IEPE) y las bajadas (TDE)."
-                )
-        else:
-            st.warning("No pudimos extraer una tabla válida de ese enlace. Verifica que sea la URL directa del perfil del corredor de la carrera.")
-
 else:
-    st.info("👋 El escáner geométrico está listo. Cargá el GPX de tu carrera en la barra lateral para identificar los sectores críticos.")
+    st.info("👋 ¡Bienvenido a VertLabs! Cargá el GPX de tu carrera en la barra lateral para iniciar.")
+
+# 4. Mostrar la tabla scrapeada si existe en memoria
+if 'df_atleta' in st.session_state:
+    st.markdown("---")
+    st.subheader("⏱️ Telemetría Oficial del Corredor (Validación en Pantalla)")
+    
+    df_atleta = st.session_state['df_atleta']
+    
+    st.success(f"¡Tabla de tiempos de paso obtenida con éxito! Se procesaron {len(df_atleta)} registros.")
+    
+    # Mostramos las métricas crudas y listado limpio de checkpoints
+    col_tabla, col_info = st.columns([2, 1])
+    with col_tabla:
+        st.dataframe(df_atleta, use_container_width=True)
+        
+    with col_info:
+        st.markdown("💡 **Checkpoints Detectados:**")
+        # Toma la primera columna asumiendo que contiene los nombres o pases
+        nombres_checkpoints = df_atleta.iloc[:, 0].dropna().unique()
+        for cp in nombres_checkpoints:
+            st.code(f"📍 {cp}")
