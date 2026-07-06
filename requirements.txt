@@ -2,3 +2,5 @@ pandas
 plotly
 gpxpy
 lxml
+html5lib
+beautifulsoup4
