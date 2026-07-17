@@ -737,17 +737,17 @@ with tab_corredor:
                     else:
                         i1, i2, i3 = st.columns(3)
                         i1.metric(
-                            "🧗 VPI - Escalada Eficiente",
+                            "🧗 VPI - Vertical Power Index",
                             f"{indices['VPI']} m/h" if indices["VPI"] is not None else "N/D",
                             help="Vertical Power Index: metros de desnivel positivo por hora en tramos con pendiente ≥12%.",
                         )
                         i2.metric(
-                            "📉 DMI - Rompepiernas",
+                            "📉 DMI - Descent Master Index",
                             f"{indices['DMI']} km/h" if indices["DMI"] is not None else "N/D",
                             help="Descent Mastery Index: velocidad promedio en tramos con pendiente ≤-12%.",
                         )
                         i3.metric(
-                            "🏆 ER - Resistencia",
+                            "🏆 ER - Endurance Rating",
                             f"{indices['ER']}" if indices["ER"] is not None else "N/D",
                             help="Endurance Rating: 100 = ritmo estable, valores menores indican degradación por fatiga.",
                         )

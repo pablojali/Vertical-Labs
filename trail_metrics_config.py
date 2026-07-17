@@ -8,7 +8,7 @@
 INDEX_CONFIG = {
     "VPI": {
         "name": "Vertical Power Index",
-        "label_es": "Escalada Eficiente",
+        "label_es": "Vertical Power Index",
         "icon": "🧗",
         "description": "Measures pure uphill climbing efficiency, specific power output, and economy during severe vertical gains.",
         "geometric_criterion": "Slope >= 12%",
@@ -25,7 +25,7 @@ INDEX_CONFIG = {
     },
     "DMI": {
         "name": "Descent Mastery Index",
-        "label_es": "Rompepiernas",
+        "label_es": "Descent Mastery Index",
         "icon": "📉",
         "description": "Evaluates technical downhill skill, gravity management, and muscular resilience against heavy eccentric loading.",
         "geometric_criterion": "Slope <= -12%",
