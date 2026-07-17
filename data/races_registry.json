@@ -31,7 +31,7 @@
             {"id": "62",  "nombre": "Tuc Meddia", "km": 156.2},
             {"id": "150", "nombre": "Meta",     "km": 163.0}
           ]
-        }
+        },
         "110": {
           "gpx_file": "data/gpx/aran/2026/CDH_2026_COLOMERS_f8d40a39ba.gpx",
           "race_slug_api": "cdh",
