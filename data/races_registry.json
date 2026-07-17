@@ -1,0 +1,14 @@
+{
+  "aran": {
+    "nombre": "Aran by UTMB",
+    "anios": {
+      "2026": {
+        "REEMPLAZAR_KM_REAL": {
+          "gpx_file": "data/gpx/aran/2026/NOMBRE_ARCHIVO_AYUDA_MEMORIA_2026.gpx",
+          "race_slug_api": "aran",
+          "checkpoints": []
+        }
+      }
+    }
+  }
+}
