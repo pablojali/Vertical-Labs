@@ -24,7 +24,7 @@
             {"id": "38",  "nombre": "Salardú", "km": 113.6},
             {"id": "40",  "nombre": "Banhs de Tredòs", "km": 122.4},
             {"id": "42",  "nombre": "Estanh Obago", "km": 129.2},
-            {"id": "46",  "nombre": "Colomèrs", "km": 134},
+            {"id": "46",  "nombre": "Colomèrs", "km": 134.0},
             {"id": "50",  "nombre": "Mont-Romies", "km": 144.3},
             {"id": "56",  "nombre": "Arties", "km": 148.8},
             {"id": "60",  "nombre": "Santet Escunhau", "km": 154.3},
@@ -39,7 +39,7 @@
             {"id": "0",   "nombre": "Sortida Vielha",  "km": 0.0},
             {"id": "22",  "nombre": "Canejan", "km": 5.9},
             {"id": "24",  "nombre": "Refugi Honeria", "km": 12.9},
-            {"id": "26",  "nombre": "Mines de Liat", "km": 23},
+            {"id": "26",  "nombre": "Mines de Liat", "km": 23.0},
             {"id": "28",  "nombre": "Còth de Varradòs", "km": 28.9},
             {"id": "32",  "nombre": "Port d'Urets", "km": 37.4},
             {"id": "34",  "nombre": "Montgarri", "km": 46.8},
@@ -50,7 +50,7 @@
             {"id": "46",  "nombre": "Colomèrs", "km": 81.3},
             {"id": "50",  "nombre": "Mont-Romies", "km": 91.6},
             {"id": "56",  "nombre": "Arties", "km": 96.1},
-            {"id": "60",  "nombre": "Santet Escunhau", "km": 102},
+            {"id": "60",  "nombre": "Santet Escunhau", "km": 102.0},
             {"id": "62",  "nombre": "Tuc Meddia", "km": 103.9},
             {"id": "150", "nombre": "Meta",     "km": 110.5}
           ]
