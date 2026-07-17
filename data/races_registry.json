@@ -3,10 +3,34 @@
     "nombre": "Val d'Aran by UTMB",
     "anios": {
       "2026": {
-        "REEMPLAZAR_KM_REAL": {
+        "163": {
           "gpx_file": "data/gpx/aran/2026/VDA_2026.gpx",
-          "race_slug_api": "aran",
-          "checkpoints": []
+          "race_slug_api": "vda",
+          "checkpoints": [
+            {"id": "0",   "nombre": "Sortida Vielha",  "km": 0.0},
+            {"id": "2",   "nombre": "Bassa d'Oles", "km": 10.5},
+            {"id": "4",   "nombre": "Artiga de Lin", "km": 24.6},
+            {"id": "6",   "nombre": "Poilaner", "km": 33.0},
+            {"id": "8",   "nombre": "Coth de Baretja", "km": 39.5},
+            {"id": "10",  "nombre": "Portilhon", "km": 42.6},
+            {"id": "20",  "nombre": "Bossòst", "km": 49.2},
+            {"id": "22",  "nombre": "Canejan", "km": 58.2},
+            {"id": "24",  "nombre": "Refugi Honeria", "km": 65.6},
+            {"id": "26",  "nombre": "Mines de Liat", "km": 75.7},
+            {"id": "28",  "nombre": "Còth de Varradòs", "km": 81.7},
+            {"id": "32",  "nombre": "Port d'Urets", "km": 90.2},
+            {"id": "34",  "nombre": "Montgarri", "km": 99.6},
+            {"id": "36",  "nombre": "Beret", "km": 104.7},
+            {"id": "38",  "nombre": "Salardú", "km": 113.6},
+            {"id": "40",  "nombre": "Banhs de Tredòs", "km": 122.4},
+            {"id": "42",  "nombre": "Estanh Obago", "km": 129.2},
+            {"id": "46",  "nombre": "Colomèrs", "km": 134},
+            {"id": "50",  "nombre": "Mont-Romies", "km": 144.3},
+            {"id": "56",  "nombre": "Arties", "km": 148.8},
+            {"id": "60",  "nombre": "Santet Escunhau", "km": 154.3},
+            {"id": "62",  "nombre": "Tuc Meddia", "km": 156.2},
+            {"id": "150", "nombre": "Meta",     "km": 163.0}
+          ]
         }
       }
     }
