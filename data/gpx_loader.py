@@ -33,8 +33,8 @@ def load_registry() -> dict:
     """
     if not os.path.exists(_REGISTRY_PATH):
         raise FileNotFoundError(
-            f"No se encontró races_registry.json en {_REGISTRY_PATH}. "
-            "Verifica que el archivo esté commiteado en el repo."
+            f"races_registry.json not found at {_REGISTRY_PATH}. "
+            "Check that the file is committed to the repo."
         )
     with open(_REGISTRY_PATH, "r", encoding="utf-8") as f:
         return json.load(f)
@@ -86,8 +86,8 @@ def get_carrera_info(carrera_slug: str, anio: str, distancia: str) -> dict:
         return registry[carrera_slug]["anios"][anio][distancia]
     except KeyError:
         raise KeyError(
-            f"No hay datos registrados para {carrera_slug} / {anio} / {distancia}K. "
-            "Revisa data/races_registry.json."
+            f"No data registered for {carrera_slug} / {anio} / {distancia}K. "
+            "Check data/races_registry.json."
         )
 
 
@@ -100,8 +100,8 @@ def get_gpx_path(carrera_slug: str, anio: str, distancia: str) -> str:
     abs_path = os.path.join(_REPO_ROOT, rel_path)
     if not os.path.exists(abs_path):
         raise FileNotFoundError(
-            f"El registro apunta a '{rel_path}' pero el archivo no existe en el repo. "
-            "¿Falta subir el GPX o hay un typo en el path?"
+            f"The registry points to '{rel_path}' but the file doesn't exist in the repo. "
+            "Is the GPX missing or is there a typo in the path?"
         )
     return abs_path
 
@@ -147,12 +147,12 @@ def build_cascading_selector(st, key_prefix: str = "race_selector"):
     """
     carreras = get_carreras()
     if not carreras:
-        st.warning("No hay carreras registradas en races_registry.json todavía.")
+        st.warning("No races registered in races_registry.json yet.")
         return None, None, None
 
     carrera_labels = {slug: nombre for slug, nombre in carreras}
     carrera_slug = st.selectbox(
-        "Carrera",
+        "Race",
         options=list(carrera_labels.keys()),
         format_func=lambda s: carrera_labels[s],
         key=f"{key_prefix}_carrera",
@@ -160,22 +160,22 @@ def build_cascading_selector(st, key_prefix: str = "race_selector"):
 
     anios = get_anios(carrera_slug)
     if not anios:
-        st.warning(f"'{carrera_slug}' no tiene años registrados.")
+        st.warning(f"'{carrera_slug}' has no registered years.")
         return carrera_slug, None, None
 
     anio = st.selectbox(
-        "Año",
+        "Year",
         options=anios,
         key=f"{key_prefix}_anio",
     )
 
     distancias = get_distancias(carrera_slug, anio)
     if not distancias:
-        st.warning(f"'{carrera_slug}' {anio} no tiene distancias registradas.")
+        st.warning(f"'{carrera_slug}' {anio} has no registered distances.")
         return carrera_slug, anio, None
 
     distancia = st.selectbox(
-        "Distancia (km)",
+        "Distance (km)",
         options=distancias,
         key=f"{key_prefix}_distancia",
     )
