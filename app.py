@@ -612,7 +612,7 @@ with tab_race:
                     df_layer = df_chart.copy()
                     df_layer.loc[df_layer["Slope Type"] != category, "Elevation (m)"] = None
                     fig.add_trace(go.Scatter(
-                        x=df_layer["Distance (km)"], y=df_layer["Elevation (m)"],
+                        x=df_layer["Distance (kms)"], y=df_layer["Elevation (mts)"],
                         mode='lines', name=category,
                         line=dict(color=color, width=width),
                         hovertemplate="Km %{x:.1f}<br>%{y:.0f} m<extra></extra>",
@@ -628,10 +628,12 @@ with tab_race:
 
                 fig.update_layout(
                     template="plotly_dark",
-                    xaxis_title="Distance (km)",
-                    yaxis_title="Elevation (m)",
+                    xaxis_title="Distance (kms)",
+                    yaxis_title="Elevation (mts)",
                     height=450,
                     hovermode="closest"
+                    xaxis=dict(dtick=5),      # una marca cada 5 km (ajustá el número)
+                    yaxis=dict(dtick=100),    # una marca cada 100 m (ajustá el número)
                 )
                 st.plotly_chart(fig, use_container_width=True)
 
@@ -662,6 +664,7 @@ with tab_race:
                 if len(valid_checkpoints) >= 2:
                     df_segments = match_checkpoints_with_gpx(df_gpx, valid_checkpoints)
                     st.markdown("##### Matching Preview (segment by segment)")
+                    columns_to_show = [c for c in df_segments.columns if c not in ("Start Point", "End Point")]
                     st.dataframe(df_segments, use_container_width=True)
                 else:
                     st.info(
