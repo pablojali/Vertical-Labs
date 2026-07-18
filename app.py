@@ -631,9 +631,8 @@ with tab_race:
                     xaxis_title="Distance (kms)",
                     yaxis_title="Elevation (mts)",
                     height=450,
-                    hovermode="closest",
-                    xaxis=dict(dtick=5),      # una marca cada 5 km (ajustá el número)
-                    yaxis=dict(dtick=100),    # una marca cada 100 m (ajustá el número)
+                    hovermode="closest"
+                    
                 )
                 st.plotly_chart(fig, use_container_width=True)
 
@@ -664,7 +663,6 @@ with tab_race:
                 if len(valid_checkpoints) >= 2:
                     df_segments = match_checkpoints_with_gpx(df_gpx, valid_checkpoints)
                     st.markdown("##### Matching Preview (segment by segment)")
-                    columns_to_show = [c for c in df_segments.columns if c not in ("Start Point", "End Point")]
                     st.dataframe(df_segments, use_container_width=True)
                 else:
                     st.info(
