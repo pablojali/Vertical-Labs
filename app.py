@@ -612,7 +612,7 @@ with tab_race:
                     df_layer = df_chart.copy()
                     df_layer.loc[df_layer["Slope Type"] != category, "Elevation (m)"] = None
                     fig.add_trace(go.Scatter(
-                        x=df_layer["Distance (km)"], y=df_layer["Elevation (mt)"],
+                        x=df_layer["Distance (km)"], y=df_layer["Elevation (m)"],
                         mode='lines', name=category,
                         line=dict(color=color, width=width),
                         hovertemplate="Km %{x:.1f}<br>%{y:.0f} m<extra></extra>",
