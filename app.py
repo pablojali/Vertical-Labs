@@ -631,7 +631,7 @@ with tab_race:
                     xaxis_title="Distance (kms)",
                     yaxis_title="Elevation (mts)",
                     height=450,
-                    hovermode="closest"
+                    hovermode="closest",
                     xaxis=dict(dtick=5),      # una marca cada 5 km (ajustá el número)
                     yaxis=dict(dtick=100),    # una marca cada 100 m (ajustá el número)
                 )
