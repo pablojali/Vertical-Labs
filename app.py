@@ -185,6 +185,47 @@ def calculate_total_elevation_gain(full_df_gpx):
     return diffs[diffs > 0].sum()
 
 
+def calculate_total_elevation_loss(full_df_gpx):
+    """Total elevation loss of the WHOLE course (negative diffs), returned
+    as a positive number for display."""
+    diffs = full_df_gpx["Elevation (m)"].diff().dropna()
+    return abs(diffs[diffs < 0].sum())
+
+
+def calculate_effort_distribution(full_df_gpx, total_km, total_elevation_gain):
+    """Pure course-level version of the split used inside the ER index:
+    finds the physical km at which the course reaches 50% of its total
+    effort-km (Total_Km_E = distance_km + elevation_gain_m/100), and
+    expresses it as a physical-distance ratio (e.g. a front-loaded, very
+    steep-at-the-start course reaches 50% of effort by km 40% of the way
+    through -> a 40/60 split)."""
+    df = full_df_gpx.sort_values("Distance (km)").reset_index(drop=True)
+    incremental_dist_km = df["Distance (km)"].diff().fillna(0)
+    incremental_gain_m = df["Elevation (m)"].diff().fillna(0).clip(lower=0)
+    incremental_effort_km = incremental_dist_km + (incremental_gain_m / 100)
+
+    total_km_e = total_km + (total_elevation_gain / 100)
+    half_effort_km = total_km_e / 2
+
+    cumulative_effort_km = incremental_effort_km.cumsum()
+    reaches_half = cumulative_effort_km >= half_effort_km
+
+    if not reaches_half.any():
+        effort_midpoint_km = total_km
+    else:
+        effort_midpoint_km = df.loc[reaches_half.idxmax(), "Distance (km)"]
+
+    pct_first_half = (effort_midpoint_km / total_km) * 100 if total_km > 0 else 0
+    pct_second_half = 100 - pct_first_half
+
+    return {
+        "total_km_e": total_km_e,
+        "effort_midpoint_km": effort_midpoint_km,
+        "pct_first_half": pct_first_half,
+        "pct_second_half": pct_second_half,
+    }
+
+
 def calculate_runner_indices(df_segments, df_runner, total_km, total_elevation_gain,
                               distance_weighting_coef=1.0):
     """Crosses the official race segments (df_segments, computed in Tab 1
@@ -274,29 +315,20 @@ def calculate_runner_indices(df_segments, df_runner, total_km, total_elevation_g
     return result, df_valid
 
 
-def calculate_indices_by_segment(full_df_gpx, df_segments, df_runner):
+def calculate_indices_by_segment(df_segments, df_runner):
     """Calculates VPI and DMI INDEPENDENTLY for each segment (degradation
     matrix), instead of one global value for the whole race.
 
-    For each segment between 2 checkpoints:
-    - Crops the sub-GPX of that segment (by km range).
-    - VPI: filters only points with slope >= 12% within the segment and
-      sums their real elevation gain, divided by the time the runner spent
-      in that specific segment.
-    - DMI: filters only points with slope <= -12% within the segment and
-      sums the real distance covered in those points, divided by the same
-      time.
+    Uses the SAME criterion as the global index (calculate_runner_indices):
+    a segment only gets a VPI value if its own average slope is >= 12%,
+    and a DMI value if its average slope is <= -12%. Otherwise it's marked
+    N/A (rather than diluting the result by mixing a partial GPS-point
+    filter with the segment's FULL time, which understates the true pace
+    on the qualifying terrain whenever the segment is mixed/rolling).
 
-    Finally normalizes both indices against the runner's Segment 1
-    (Segment 1 = 100), to plot the degradation curve on a comparable
-    0-100 scale."""
-
-    full_df_gpx = full_df_gpx.sort_values("Distance (km)").reset_index(drop=True)
-    # Reconstruct the point-to-point "mini-segment" (distance and elevation
-    # change between each consecutive GPX point) from the cumulative
-    # columns we already have.
-    incremental_dist_m = full_df_gpx["Distance (km)"].diff() * 1000
-    incremental_elevation_m = full_df_gpx["Elevation (m)"].diff()
+    Finally normalizes both indices against the runner's first valid
+    segment (baseline = 100), to plot the degradation curve on a
+    comparable 0-100 scale."""
 
     time_by_point = {
         row["Point"]: parse_time_to_hours(row.get("Cumulative Time"))
@@ -309,28 +341,27 @@ def calculate_indices_by_segment(full_df_gpx, df_segments, df_runner):
     for i, seg in sorted_segments.iterrows():
         p_start, p_end = seg["Start Point"], seg["End Point"]
         km_start, km_end = seg["Start Km"], seg["End Km"]
+        avg_slope = seg["Average Slope (%)"]
 
         if p_start not in time_by_point or p_end not in time_by_point:
             segment_time_h = None
         else:
             segment_time_h = time_by_point[p_end] - time_by_point[p_start]
 
-        segment_mask = (full_df_gpx["Distance (km)"] >= km_start) & (full_df_gpx["Distance (km)"] <= km_end)
-
         vpi_raw, dmi_raw = None, None
-        if segment_time_h and segment_time_h > 0:
-            strong_climb_mask = segment_mask & (full_df_gpx["Slope (%)"] >= STRONG_SLOPE_THRESHOLD)
-            vpi_gain_m = incremental_elevation_m[strong_climb_mask].sum()
-            vpi_raw = vpi_gain_m / segment_time_h if vpi_gain_m > 0 else None
-
-            strong_descent_mask = segment_mask & (full_df_gpx["Slope (%)"] <= -STRONG_SLOPE_THRESHOLD)
-            dmi_dist_km = incremental_dist_m[strong_descent_mask].sum() / 1000
-            dmi_raw = dmi_dist_km / segment_time_h if dmi_dist_km > 0 else None
+        if segment_time_h and segment_time_h > 0 and avg_slope is not None:
+            if avg_slope >= STRONG_SLOPE_THRESHOLD:
+                elevation_gain = seg["Elevation Gain (m)"]
+                vpi_raw = elevation_gain / segment_time_h if elevation_gain else None
+            elif avg_slope <= -STRONG_SLOPE_THRESHOLD:
+                segment_distance_km = seg["Segment Distance (km)"]
+                dmi_raw = segment_distance_km / segment_time_h if segment_distance_km else None
 
         rows.append({
             "Segment": f"P{p_start}→P{p_end}",
             "Start Km": km_start,
             "End Km": km_end,
+            "Average Slope (%)": avg_slope,
             "Runner Time (h)": round(segment_time_h, 2) if segment_time_h is not None else None,
             "VPI Raw (m/h)": round(vpi_raw, 1) if vpi_raw is not None else None,
             "DMI Raw (km/h)": round(dmi_raw, 2) if dmi_raw is not None else None,
@@ -563,13 +594,17 @@ with tab_race:
                     for category in SLOPE_CATEGORY_ORDER
                 }
                 km_above_altitude = (df_gpx["Altitude Zone"] == f"Above {ALTITUDE_THRESHOLD}m").sum() * km_per_point
+                total_elevation_gain = calculate_total_elevation_gain(df_gpx)
+                total_elevation_loss = calculate_total_elevation_loss(df_gpx)
 
-                # --- Top row: Total Distance & Above-altitude, side by side ---
-                col1, col2 = st.columns(2)
+                # --- Top row: Distance, Elevation +/-, Above-altitude ---
+                col1, col2, col3, col4 = st.columns(4)
                 col1.metric("Total Distance", f"{total_km:.2f} km")
-                col2.metric(f"Above {ALTITUDE_THRESHOLD}m", f"{km_above_altitude:.2f} km")
+                col2.metric("Elevation Gain (+)", f"{total_elevation_gain:.0f} m")
+                col3.metric("Elevation Loss (−)", f"-{total_elevation_loss:.0f} m")
+                col4.metric(f"Above {ALTITUDE_THRESHOLD}m", f"{km_above_altitude:.2f} km")
 
-                # --- Horizontal bar chart: km per slope category, same colors as the map ---
+                # --- Horizontal bar chart: km + % per slope category, same colors as the map ---
                 st.markdown("##### Slope Breakdown")
                 fig_bars = go.Figure()
                 fig_bars.add_trace(go.Bar(
@@ -577,7 +612,10 @@ with tab_race:
                     y=SLOPE_CATEGORY_ORDER,
                     orientation="h",
                     marker_color=[SLOPE_CATEGORY_COLORS[c] for c in SLOPE_CATEGORY_ORDER],
-                    text=[f"{km_by_category[c]:.2f} km" for c in SLOPE_CATEGORY_ORDER],
+                    text=[
+                        f"{km_by_category[c]:.2f} km ({km_by_category[c] / total_km * 100:.1f}%)"
+                        for c in SLOPE_CATEGORY_ORDER
+                    ],
                     textposition="outside",
                     hovertemplate="%{y}: %{x:.2f} km<extra></extra>",
                 ))
@@ -589,6 +627,54 @@ with tab_race:
                     showlegend=False,
                 )
                 st.plotly_chart(fig_bars, use_container_width=True)
+
+                # --- Effort distribution (same split logic used inside ER) ---
+                st.markdown("---")
+                st.markdown("##### ⚖️ Effort Distribution")
+                st.caption(
+                    "Where the course reaches 50% of its total effort-km "
+                    "(Total_Km_E = distance + elevation gain / 100) — the same split "
+                    "point the ER index uses. A course with heavy early climbing will "
+                    "reach 50% of its effort well before the halfway physical point."
+                )
+
+                effort_dist = calculate_effort_distribution(df_gpx, total_km, total_elevation_gain)
+
+                fig_effort = go.Figure()
+                fig_effort.add_trace(go.Bar(
+                    y=["Effort Split"],
+                    x=[effort_dist["pct_first_half"]],
+                    orientation="h",
+                    name=f"First 50% of effort (km 0 → {effort_dist['effort_midpoint_km']:.1f})",
+                    marker_color="#22d3ee",
+                    text=f"{effort_dist['pct_first_half']:.0f}%",
+                    textposition="inside",
+                    hovertemplate="First 50%% of effort: %{x:.1f}%% of the course<extra></extra>",
+                ))
+                fig_effort.add_trace(go.Bar(
+                    y=["Effort Split"],
+                    x=[effort_dist["pct_second_half"]],
+                    orientation="h",
+                    name=f"Second 50% of effort (km {effort_dist['effort_midpoint_km']:.1f} → {total_km:.1f})",
+                    marker_color="#ffa500",
+                    text=f"{effort_dist['pct_second_half']:.0f}%",
+                    textposition="inside",
+                    hovertemplate="Second 50%% of effort: %{x:.1f}%% of the course<extra></extra>",
+                ))
+                fig_effort.update_layout(
+                    template="plotly_dark",
+                    barmode="stack",
+                    xaxis_title="% of physical course distance",
+                    height=180,
+                    margin=dict(l=10, r=10, t=10, b=10),
+                    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
+                )
+                st.plotly_chart(fig_effort, use_container_width=True)
+                st.caption(
+                    f"Split ≈ **{effort_dist['pct_first_half']:.0f}/{effort_dist['pct_second_half']:.0f}** "
+                    f"(physical distance to reach 50% of effort vs. remaining distance). "
+                    f"Total effort-adjusted distance (Km_E): {effort_dist['total_km_e']:.1f} km."
+                )
 
                 # --- Effort map (elevation profile colored by slope category) ---
                 st.markdown("---")
@@ -628,13 +714,12 @@ with tab_race:
 
                 fig.update_layout(
                     template="plotly_dark",
-                    xaxis_title="Distance (kms)",
-                    yaxis_title="Elevation (mts)",
+                    xaxis_title="Distance (km)",
+                    yaxis_title="Elevation (m)",
                     height=450,
                     hovermode="closest",
-                    xaxis=dict(dtick=5),      # una marca cada 5 km (ajustá el número)
-                    yaxis=dict(dtick=200),    # una marca cada 100 m (ajustá el número)
-                    
+                    xaxis=dict(dtick=5),
+                    yaxis=dict(dtick=100),
                 )
                 st.plotly_chart(fig, use_container_width=True)
 
@@ -666,7 +751,7 @@ with tab_race:
                     df_segments = match_checkpoints_with_gpx(df_gpx, valid_checkpoints)
                     st.markdown("##### Matching Preview (segment by segment)")
                     columns_to_show = [c for c in df_segments.columns if c not in ("Start Point", "End Point")]
-                    st.dataframe(df_segments, use_container_width=True)
+                    st.dataframe(df_segments[columns_to_show], use_container_width=True)
                 else:
                     st.info(
                         "This race has fewer than 2 valid numeric checkpoints in the registry: "
@@ -818,10 +903,15 @@ with tab_runner:
                         )
 
                         df_segment_degradation = calculate_indices_by_segment(
-                            current_race_data["df"], race_segments_df, df_runner
+                            race_segments_df, df_runner
                         )
 
                         st.dataframe(df_segment_degradation, use_container_width=True)
+                        st.caption(
+                            "Segments where the average slope is between -12% and +12% "
+                            "show N/A for VPI/DMI — they're not dominated by steep terrain, "
+                            "so a single climb/descent speed wouldn't be a meaningful number."
+                        )
 
                         fig_degradation = go.Figure()
                         fig_degradation.add_trace(go.Scatter(
