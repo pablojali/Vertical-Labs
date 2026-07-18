@@ -633,7 +633,7 @@ with tab_race:
                     height=450,
                     hovermode="closest",
                     xaxis=dict(dtick=5),      # una marca cada 5 km (ajustá el número)
-                    yaxis=dict(dtick=100),    # una marca cada 100 m (ajustá el número)
+                    yaxis=dict(dtick=200),    # una marca cada 100 m (ajustá el número)
                     
                 )
                 st.plotly_chart(fig, use_container_width=True)
