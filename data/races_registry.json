@@ -56,7 +56,7 @@
           ]
         },
         "75": {
-          "gpx_file": "TDL_V1_2_1ae7000dd9.gpx",
+          "gpx_file": "data/gpx/aran/2026/TDL_V1_2_1ae7000dd9.gpx",
           "race_slug_api": "tdl",
           "checkpoints": [
             {"id": "0",   "nombre": "Sortida Vielha",  "km": 0.0},
@@ -67,6 +67,53 @@
             {"id": "57",  "nombre": "Horno", "km": 52.2},
             {"id": "59",  "nombre": "Tuc de Meddia TDL", "km": 63.8},
             {"id": "60",  "nombre": "Santet Escunhau", "km": 65.5},
+            {"id": "150", "nombre": "Meta",     "km": 73.7}
+          ]
+        }
+      }
+    }
+  }
+  "lavaredo": {
+    "nombre": "Lavaredo Ultra Trail by UTMB",
+    "anios": {
+      "2026": {
+        "120": {
+          "gpx_file": "data/gpx/lavaredo/2026/LUT_20_Madre_2026_6_2025_2065s_20pul_89a81f913b.gpx",
+          "race_slug_api": "120K",
+          "checkpoints": [
+            {"id": "0",   "nombre": "Cortina d'Ampezzo",  "km": 0.0},
+            {"id": "2",   "nombre": "Ospitale", "km": 18.8},
+            {"id": "4",   "nombre": "Passo Tre Croci", "km": 28.1},
+            {"id": "6",   "nombre": "Federavecchia", "km": 34.1},
+            {"id": "8",   "nombre": "Misurina", "km": 42.7},
+            {"id": "10",  "nombre": "Rifugio Auronzo", "km": 49.9},
+            {"id": "16",  "nombre": "Cimabanche", "km": 67.5},
+            {"id": "18",  "nombre": "Malga Ra Stua", "km": 77.1},
+            {"id": "20",  "nombre": "Pian de loa", "km": 81.7},
+            {"id": "22",  "nombre": "Val Travenanzes", "km": 84.3},
+            {"id": "23",  "nombre": "Malga Travenanzes", "km": 90.1},
+            {"id": "24",  "nombre": "Col Gallina", "km": 97.7},
+            {"id": "26",  "nombre": "Rifugio Averau", "km": 101.7},
+            {"id": "28",  "nombre": "Passo Giau", "km": 105.1},
+            {"id": "30",  "nombre": "Mondeval", "km": 108.9},
+            {"id": "32",  "nombre": "Rifugio Croda da Lago", "km": 112.7},
+            {"id": "34",  "nombre": "Mortisa", "km": 120},
+            {"id": "100",  "nombre": "Cortina d'Ampezzo", "km": 121.7}
+          ]
+        },
+        "80": {
+          "gpx_file": "data/gpx/lavaredo/2026/CDH_2026_COLOMERS_f8d40a39ba.gpx",
+          "race_slug_api": "cdh",
+          "checkpoints": [
+           
+            {"id": "150", "nombre": "Meta",     "km": 110.5}
+          ]
+        },
+        "50": {
+          "gpx_file": "data/gpx/lavaredo/2026/TDL_V1_2_1ae7000dd9.gpx",
+          "race_slug_api": "tdl",
+          "checkpoints": [
+            {"id": "0",   "nombre": "Sortida Vielha",  "km": 0.0},
             {"id": "150", "nombre": "Meta",     "km": 73.7}
           ]
         }
