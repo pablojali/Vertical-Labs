@@ -537,11 +537,8 @@ tab_race, tab_runner, tab_methodology = st.tabs(
 with tab_race:
     st.header("🗺️ Geometric Race Analysis (GPX)")
     st.caption(
-        f"👋 Choose race, year and distance above to load the geometric analysis.m"
-        f"Strong slope: ≥{STRONG_SLOPE_THRESHOLD}% climb / ≤-{STRONG_SLOPE_THRESHOLD}% descent · "
-        f"Moderate: {MODERATE_SLOPE_MIN}-{MODERATE_SLOPE_MAX}% · m"
-        f"Altitude: >{ALTITUDE_THRESHOLD}m"
-    )
+        f"👋 Choose race, year and distance above to load the geometric analysis."
+        )
 
     race_slug, year, distance = build_cascading_selector(st, key_prefix="tab1_selector")
 
