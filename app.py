@@ -423,12 +423,15 @@ def calculate_indices_by_segment(full_df_gpx, df_segments, df_runner):
 def process_runner_gpx_with_time(file):
     """Parses a runner's PERSONAL GPX track (e.g. exported from a COROS/
     Garmin watch, which includes a real timestamp on every point) into a
-    point-by-point DataFrame with cumulative distance, elevation, slope,
-    and REAL elapsed time since the start (in hours).
+    RAW point-by-point DataFrame with cumulative distance, elevation, and
+    REAL elapsed time since the start (in hours).
 
-    Unlike the official race GPX (which has no timing data), this lets us
-    calculate VPI/DMI directly from measured data, with no effort-based
-    time estimation at all."""
+    Intentionally does NOT compute an instantaneous point-to-point slope
+    here: personal watch tracks are usually sampled ~1 point/second, only
+    a few meters apart, so raw point-to-point slope is dominated by
+    altimeter/GPS noise (the same issue documented for the official GPX).
+    Slope is computed later over fixed-distance windows instead - see
+    build_runner_slope_windows()."""
     gpx = gpxpy.parse(file)
     points_data = []
     cumulative_distance = 0.0
@@ -446,15 +449,12 @@ def process_runner_gpx_with_time(file):
                 if previous_point:
                     dist = point.distance_2d(previous_point)
                     cumulative_distance += dist
-                    elevation_change = point.elevation - previous_point.elevation
-                    slope = (elevation_change / dist) * 100 if dist > 0 else 0
 
-                    points_data.append({
-                        "Distance (km)": cumulative_distance / 1000.0,
-                        "Elevation (m)": point.elevation,
-                        "Slope (%)": slope,
-                        "Elapsed Time (h)": (point.time - start_time).total_seconds() / 3600,
-                    })
+                points_data.append({
+                    "Distance (km)": cumulative_distance / 1000.0,
+                    "Elevation (m)": point.elevation,
+                    "Elapsed Time (h)": (point.time - start_time).total_seconds() / 3600,
+                })
                 previous_point = point
 
     if not points_data:
@@ -465,19 +465,56 @@ def process_runner_gpx_with_time(file):
     return pd.DataFrame(points_data)
 
 
-def calculate_real_indices_by_segment(runner_gpx_df, df_segments):
+def build_runner_slope_windows(runner_gpx_df, window_m=500):
+    """Groups the runner's RAW 1-sample/second track into fixed-distance
+    windows (default 500m, stable in the 250m-2000m range per VertLabs'
+    own findings on the official GPX) and computes, per window:
+    - net elevation change and slope over the whole window (cancels out
+      point-to-point altimeter noise, unlike a raw instantaneous slope)
+    - the REAL elapsed time spent in that window (from the watch's
+      timestamps - not estimated)."""
+    df = runner_gpx_df.sort_values("Distance (km)").reset_index(drop=True)
+    df["window"] = (df["Distance (km)"] * 1000 // window_m).astype(int)
+
+    rows = []
+    for _, window_df in df.groupby("window"):
+        if len(window_df) < 2:
+            continue
+        km_start = window_df["Distance (km)"].iloc[0]
+        km_end = window_df["Distance (km)"].iloc[-1]
+        window_distance_km = km_end - km_start
+        if window_distance_km <= 0:
+            continue
+
+        elevation_change_m = window_df["Elevation (m)"].iloc[-1] - window_df["Elevation (m)"].iloc[0]
+        slope_pct = (elevation_change_m / (window_distance_km * 1000)) * 100
+
+        time_start_h = window_df["Elapsed Time (h)"].iloc[0]
+        time_end_h = window_df["Elapsed Time (h)"].iloc[-1]
+
+        rows.append({
+            "Window Start Km": km_start,
+            "Window End Km": km_end,
+            "Window Distance (km)": window_distance_km,
+            "Window Elevation Change (m)": elevation_change_m,
+            "Window Slope (%)": slope_pct,
+            "Window Time (h)": time_end_h - time_start_h,
+        })
+
+    return pd.DataFrame(rows)
+
+
+def calculate_real_indices_by_segment(runner_gpx_df, df_segments, window_m=500):
     """Calculates the REAL (measured, not estimated) VPI and DMI per
     segment, directly from the runner's own timestamped GPX track.
 
-    For each official segment [Start Km, End Km], slices the runner's
-    track by his OWN cumulative distance in that range, and sums the real
-    elapsed-time increments (not an effort-based estimate) on the points
-    that individually qualify as steep climb/descent."""
+    Slope is evaluated per 500m window (see build_runner_slope_windows),
+    not per raw GPS sample, to avoid altimeter-noise saturation. For each
+    official segment [Start Km, End Km], sums the real elapsed time and
+    elevation change of the windows that individually qualify as steep
+    climb/descent and that fall within that segment's km range."""
 
-    runner_gpx_df = runner_gpx_df.sort_values("Distance (km)").reset_index(drop=True)
-    incremental_dist_km = runner_gpx_df["Distance (km)"].diff()
-    incremental_elevation_m = runner_gpx_df["Elevation (m)"].diff()
-    incremental_time_h = runner_gpx_df["Elapsed Time (h)"].diff()
+    windows = build_runner_slope_windows(runner_gpx_df, window_m=window_m)
 
     sorted_segments = df_segments.sort_values("Start Km").reset_index(drop=True)
     rows = []
@@ -486,10 +523,11 @@ def calculate_real_indices_by_segment(runner_gpx_df, df_segments):
         p_start, p_end = seg["Start Point"], seg["End Point"]
         km_start, km_end = seg["Start Km"], seg["End Km"]
 
-        segment_mask = (runner_gpx_df["Distance (km)"] >= km_start) & (runner_gpx_df["Distance (km)"] <= km_end)
-        segment_times = runner_gpx_df.loc[segment_mask, "Elapsed Time (h)"]
+        segment_windows = windows[
+            (windows["Window Start Km"] >= km_start) & (windows["Window End Km"] <= km_end)
+        ]
 
-        if segment_times.empty:
+        if segment_windows.empty:
             rows.append({
                 "Segment": f"P{p_start}→P{p_end}",
                 "Start Km": km_start,
@@ -500,16 +538,16 @@ def calculate_real_indices_by_segment(runner_gpx_df, df_segments):
             })
             continue
 
-        real_segment_time_h = segment_times.max() - segment_times.min()
+        real_segment_time_h = segment_windows["Window Time (h)"].sum()
 
-        climb_mask = segment_mask & (runner_gpx_df["Slope (%)"] >= STRONG_SLOPE_THRESHOLD)
-        climb_gain_m = incremental_elevation_m[climb_mask].sum()
-        climb_time_h = incremental_time_h[climb_mask].sum()
+        climb_windows = segment_windows[segment_windows["Window Slope (%)"] >= STRONG_SLOPE_THRESHOLD]
+        climb_gain_m = climb_windows["Window Elevation Change (m)"].sum()
+        climb_time_h = climb_windows["Window Time (h)"].sum()
         vpi_real = (climb_gain_m / climb_time_h) if climb_time_h and climb_time_h > 0 and climb_gain_m > 0 else None
 
-        descent_mask = segment_mask & (runner_gpx_df["Slope (%)"] <= -STRONG_SLOPE_THRESHOLD)
-        descent_dist_km = incremental_dist_km[descent_mask].sum()
-        descent_time_h = incremental_time_h[descent_mask].sum()
+        descent_windows = segment_windows[segment_windows["Window Slope (%)"] <= -STRONG_SLOPE_THRESHOLD]
+        descent_dist_km = descent_windows["Window Distance (km)"].sum()
+        descent_time_h = descent_windows["Window Time (h)"].sum()
         dmi_real = (descent_dist_km / descent_time_h) if descent_time_h and descent_time_h > 0 and descent_dist_km > 0 else None
 
         rows.append({
@@ -769,8 +807,7 @@ with tab_race:
                 st.markdown("##### ⚖️ Effort Distribution")
                 st.caption(
                     "Where the course reaches 50% of its total effort-km "
-                    "(Total_Km_E = distance + elevation gain / 100) — the same split "
-                    "point the ER index uses. A course with heavy early climbing will "
+                    " A course with heavy early climbing will "
                     "reach 50% of its effort well before the halfway physical point."
                 )
 
