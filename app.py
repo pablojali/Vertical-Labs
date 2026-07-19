@@ -1,5 +1,6 @@
 import streamlit as st
 import pandas as pd
+import numpy as np
 import plotly.graph_objects as go
 import gpxpy
 import re
@@ -315,6 +316,20 @@ def calculate_runner_indices(df_segments, df_runner, total_km, total_elevation_g
     return result, df_valid
 
 
+def normalize_segment_index(series):
+    """Normalizes a per-segment index series against its first valid
+    (non-null, non-zero) value, expressed as Segment 1 = 100. Shared by
+    both the checkpoint-estimated and the GPX-measured degradation
+    tables, so their charts are on the same comparable scale."""
+    valid_values = series.dropna()
+    if valid_values.empty:
+        return pd.Series([None] * len(series), index=series.index)
+    baseline = valid_values.iloc[0]
+    if not baseline:
+        return pd.Series([None] * len(series), index=series.index)
+    return ((series / baseline) * 100).round(1)
+
+
 def calculate_indices_by_segment(full_df_gpx, df_segments, df_runner):
     """Calculates VPI and DMI INDEPENDENTLY for each segment (degradation
     matrix), instead of one global value for the whole race.
@@ -405,17 +420,8 @@ def calculate_indices_by_segment(full_df_gpx, df_segments, df_runner):
     df_segments_out = pd.DataFrame(rows)
 
     # Normalization against the runner's first valid segment (Segment 1 = 100)
-    def _normalize(series):
-        valid_values = series.dropna()
-        if valid_values.empty:
-            return pd.Series([None] * len(series), index=series.index)
-        baseline = valid_values.iloc[0]
-        if not baseline:
-            return pd.Series([None] * len(series), index=series.index)
-        return (series / baseline) * 100
-
-    df_segments_out["VPI Index (0-100)"] = _normalize(df_segments_out["VPI Raw (m/h)"]).round(1)
-    df_segments_out["DMI Index (0-100)"] = _normalize(df_segments_out["DMI Raw (km/h)"]).round(1)
+    df_segments_out["VPI Index (0-100)"] = normalize_segment_index(df_segments_out["VPI Raw (m/h)"])
+    df_segments_out["DMI Index (0-100)"] = normalize_segment_index(df_segments_out["DMI Raw (km/h)"])
 
     return df_segments_out
 
@@ -560,6 +566,73 @@ def calculate_real_indices_by_segment(runner_gpx_df, df_segments, window_m=500):
         })
 
     return pd.DataFrame(rows)
+
+
+def interpolate_time_at_km(runner_gpx_df, target_km):
+    """Linearly interpolates the runner's REAL elapsed time (from their
+    personal GPX) at a given cumulative km, using their own recorded
+    distance/time curve. Returns None if target_km is outside the
+    recorded range."""
+    df = runner_gpx_df.sort_values("Distance (km)")
+    if target_km < df["Distance (km)"].iloc[0] or target_km > df["Distance (km)"].iloc[-1]:
+        return None
+    return float(np.interp(target_km, df["Distance (km)"], df["Elapsed Time (h)"]))
+
+
+def calculate_global_real_indices(runner_gpx_df, official_df_gpx, total_km, total_elevation_gain,
+                                   window_m=500, distance_weighting_coef=1.0):
+    """Calculates VPI, DMI and ER for the WHOLE race directly from the
+    runner's personal, timestamped GPX - no checkpoint-based estimation
+    at all. This is the GPX-only counterpart to calculate_runner_indices
+    (which relies on UTMB Live checkpoint times).
+
+    VPI/DMI: aggregate every 500m window across the entire track that
+    qualifies as steep climb/descent (see build_runner_slope_windows).
+    ER: uses the same effort-km midpoint as the course-level
+    calculate_effort_distribution, but measures the runner's REAL elapsed
+    time before/after that point (interpolated from their own track)
+    instead of estimating it."""
+
+    windows = build_runner_slope_windows(runner_gpx_df, window_m=window_m)
+
+    climb_windows = windows[windows["Window Slope (%)"] >= STRONG_SLOPE_THRESHOLD]
+    climb_time_h = climb_windows["Window Time (h)"].sum()
+    climb_gain_m = climb_windows["Window Elevation Change (m)"].sum()
+    vpi = (climb_gain_m / climb_time_h) if climb_time_h and climb_time_h > 0 and climb_gain_m > 0 else None
+
+    descent_windows = windows[windows["Window Slope (%)"] <= -STRONG_SLOPE_THRESHOLD]
+    descent_time_h = descent_windows["Window Time (h)"].sum()
+    descent_dist_km = descent_windows["Window Distance (km)"].sum()
+    dmi = (descent_dist_km / descent_time_h) if descent_time_h and descent_time_h > 0 and descent_dist_km > 0 else None
+
+    effort_dist = calculate_effort_distribution(official_df_gpx, total_km, total_elevation_gain)
+    effort_midpoint_km = effort_dist["effort_midpoint_km"]
+
+    time_at_midpoint_h = interpolate_time_at_km(runner_gpx_df, effort_midpoint_km)
+    total_time_h = float(runner_gpx_df["Elapsed Time (h)"].max())
+
+    er, pacing_decay_pct = None, None
+    if time_at_midpoint_h is not None:
+        time_first_half_h = time_at_midpoint_h
+        time_second_half_h = total_time_h - time_at_midpoint_h
+        # By construction, both halves represent ~50% of total effort-km
+        # each, so the pacing comparison reduces to the real time ratio.
+        if time_first_half_h > 0 and time_second_half_h > 0:
+            pacing_decay_pct = ((time_second_half_h / time_first_half_h) - 1) * 100
+            er = 100 - (pacing_decay_pct * distance_weighting_coef)
+
+    return {
+        "VPI": round(vpi, 1) if vpi is not None else None,
+        "DMI": round(dmi, 2) if dmi is not None else None,
+        "ER": round(er, 1) if er is not None else None,
+        "Pacing_Decay_%": round(pacing_decay_pct, 1) if pacing_decay_pct is not None else None,
+        "total_time_h": total_time_h,
+        "total_distance_km": float(runner_gpx_df["Distance (km)"].max()),
+        "total_elevation_gain_m": float(runner_gpx_df["Elevation (m)"].diff().clip(lower=0).sum()),
+    }
+
+
+# Automated timing-data scraping.
 # live.utmb.world is a Next.js app: the HTML returned by the server is
 # empty and the data is fetched afterwards via JS from an internal API.
 # By inspecting the browser's Network tab, we found the real endpoint
@@ -666,8 +739,8 @@ def scrape_runner_splits(url):
 if 'saved_races' not in st.session_state:
     st.session_state['saved_races'] = {}
 
-tab_race, tab_runner, tab_methodology = st.tabs(
-    ["🗺️ Race Analysis", "🏃 Runner Metrics", "📖 Indices & Methodology"]
+tab_race, tab_runner, tab_gpx, tab_comparison, tab_methodology = st.tabs(
+    ["🗺️ Race Analysis", "🏃 Runner Metrics", "🛰️ GPX Metrics", "⚖️ UTMB vs GPX", "📖 Indices & Methodology"]
 )
 
 # ---------------------------------------------
@@ -807,7 +880,8 @@ with tab_race:
                 st.markdown("##### ⚖️ Effort Distribution")
                 st.caption(
                     "Where the course reaches 50% of its total effort-km "
-                    " A course with heavy early climbing will "
+                    "(Total_Km_E = distance + elevation gain / 100) — the same split "
+                    "point the ER index uses. A course with heavy early climbing will "
                     "reach 50% of its effort well before the halfway physical point."
                 )
 
@@ -1091,6 +1165,7 @@ with tab_runner:
                         # estimate against a runner's real, timestamped personal GPX.
                         st.session_state['estimated_degradation_df'] = df_segment_degradation
                         st.session_state['estimated_degradation_race'] = selected_race
+                        st.session_state['estimated_global_indices'] = indices
 
                         fig_degradation = go.Figure()
                         fig_degradation.add_trace(go.Scatter(
@@ -1144,6 +1219,245 @@ with tab_runner:
 # ---------------------------------------------
 # TAB 3: Indices and methodology documentation
 # ---------------------------------------------
+# ---------------------------------------------
+# TAB 3: GPX Metrics (mirrors Runner Metrics, but measured directly
+# from the runner's personal, timestamped GPX instead of UTMB Live)
+# ---------------------------------------------
+with tab_gpx:
+    st.header("🛰️ GPX-Based Runner Metrics")
+    st.caption(
+        "Same VPI/DMI/ER indices as the 'Runner Metrics' tab, but calculated directly "
+        "from the runner's personal GPS watch track (with real timestamps) instead of "
+        "the checkpoint-time estimation. No UTMB Live link needed here."
+    )
+
+    available_races_gpx = st.session_state.get('saved_races', {})
+    if not available_races_gpx:
+        st.warning(
+            "⚠️ You haven't loaded any race yet. Go to the "
+            "**'🗺️ Race Analysis'** tab, select and analyze a race, and it "
+            "will show up here automatically."
+        )
+        selected_race_gpx = None
+    else:
+        selected_race_gpx = st.selectbox(
+            "Which race did this runner do?",
+            options=list(available_races_gpx.keys()),
+            key="gpx_race_selector",
+        )
+        race_data_gpx = available_races_gpx[selected_race_gpx]
+        st.caption(
+            f"Selected race: **{selected_race_gpx}** · "
+            f"{race_data_gpx['total_km']:.1f} km total"
+        )
+
+    st.markdown("---")
+
+    personal_gpx_file = st.file_uploader(
+        "Runner's personal GPX (recorded activity, must include timestamps)",
+        type=["gpx", "xml"],
+        key="gpx_metrics_uploader",
+    )
+    calculate_gpx_button = st.button(
+        "🛰️ Calculate metrics from this GPX", type="primary", use_container_width=True
+    )
+
+    if calculate_gpx_button:
+        if personal_gpx_file is None:
+            st.warning("Upload a personal GPX file first.")
+        elif not selected_race_gpx:
+            st.warning("Select a race above first.")
+        else:
+            current_race_data_gpx = available_races_gpx[selected_race_gpx]
+            race_segments_df_gpx = current_race_data_gpx.get("df_segments")
+
+            if race_segments_df_gpx is None or race_segments_df_gpx.empty:
+                st.warning(
+                    "⚠️ The selected race doesn't have checkpoints with km loaded yet. "
+                    "Go back to the 'Race Analysis' tab, load the checkpoints for that "
+                    "race, and reload it here."
+                )
+            else:
+                with st.spinner("Parsing personal GPX and calculating metrics..."):
+                    try:
+                        runner_gpx_df = process_runner_gpx_with_time(personal_gpx_file)
+                        total_race_gain_gpx = calculate_total_elevation_gain(current_race_data_gpx["df"])
+                        global_indices_gpx = calculate_global_real_indices(
+                            runner_gpx_df,
+                            current_race_data_gpx["df"],
+                            current_race_data_gpx["total_km"],
+                            total_race_gain_gpx,
+                        )
+                        df_segment_gpx = calculate_real_indices_by_segment(runner_gpx_df, race_segments_df_gpx)
+                        gpx_error = None
+                    except Exception:
+                        global_indices_gpx, df_segment_gpx = None, None
+                        gpx_error = traceback.format_exc()
+
+                if gpx_error:
+                    st.error("❌ Couldn't process this GPX.")
+                    with st.expander("View technical error detail"):
+                        st.code(gpx_error, language="python")
+                else:
+                    st.success("✅ Metrics calculated directly from the personal GPX.")
+
+                    # --- Track summary card (no name/bib available from a raw GPX) ---
+                    c1, c2, c3 = st.columns(3)
+                    c1.metric("Total Distance (GPX)", f"{global_indices_gpx['total_distance_km']:.1f} km")
+                    c2.metric("Total Time (GPX)", f"{global_indices_gpx['total_time_h']:.2f} h")
+                    c3.metric("Total Elevation Gain (GPX)", f"{global_indices_gpx['total_elevation_gain_m']:.0f} m")
+
+                    st.markdown("### 🎯 Performance Indices (measured)")
+                    i1, i2, i3 = st.columns(3)
+                    i1.metric(
+                        "🧗 VPI - Climbing Efficiency",
+                        f"{global_indices_gpx['VPI']} m/h" if global_indices_gpx["VPI"] is not None else "N/A",
+                        help="Measured directly from 500m windows across the whole track with slope ≥12%.",
+                    )
+                    i2.metric(
+                        "📉 DMI - Descent Mastery",
+                        f"{global_indices_gpx['DMI']} km/h" if global_indices_gpx["DMI"] is not None else "N/A",
+                        help="Measured directly from 500m windows across the whole track with slope ≤-12%.",
+                    )
+                    i3.metric(
+                        "🏆 ER - Endurance Rating",
+                        f"{global_indices_gpx['ER']}" if global_indices_gpx["ER"] is not None else "N/A",
+                        help="Uses the runner's REAL elapsed time before/after the course's effort-km midpoint.",
+                    )
+
+                    # --- Degradation curve by segment (measured) ---
+                    st.markdown("---")
+                    st.markdown("### 📉 Degradation Curve by Segment (measured)")
+
+                    df_segment_gpx["VPI Index (0-100)"] = normalize_segment_index(df_segment_gpx["VPI Real (m/h)"])
+                    df_segment_gpx["DMI Index (0-100)"] = normalize_segment_index(df_segment_gpx["DMI Real (km/h)"])
+
+                    st.dataframe(df_segment_gpx, use_container_width=True)
+
+                    fig_gpx_degradation = go.Figure()
+                    fig_gpx_degradation.add_trace(go.Scatter(
+                        x=df_segment_gpx["End Km"],
+                        y=df_segment_gpx["VPI Index (0-100)"],
+                        mode="lines+markers",
+                        name="VPI (Climbing)",
+                        line=dict(color="#22d3ee", width=3),
+                        text=df_segment_gpx["Segment"],
+                        hovertemplate="%{text}<br>Km %{x:.0f}<br>VPI Index: %{y:.1f}<extra></extra>",
+                    ))
+                    fig_gpx_degradation.add_trace(go.Scatter(
+                        x=df_segment_gpx["End Km"],
+                        y=df_segment_gpx["DMI Index (0-100)"],
+                        mode="lines+markers",
+                        name="DMI (Descent)",
+                        line=dict(color="#ffa500", width=3),
+                        text=df_segment_gpx["Segment"],
+                        hovertemplate="%{text}<br>Km %{x:.0f}<br>DMI Index: %{y:.1f}<extra></extra>",
+                    ))
+                    fig_gpx_degradation.update_layout(
+                        template="plotly_dark",
+                        xaxis_title="Cumulative Km",
+                        yaxis_title="Index (0-100, Segment 1 = 100)",
+                        height=420,
+                        hovermode="x unified",
+                    )
+                    st.plotly_chart(fig_gpx_degradation, use_container_width=True)
+
+                    # Saved so the 'UTMB vs GPX' tab can compare against the estimate
+                    st.session_state['real_degradation_df'] = df_segment_gpx
+                    st.session_state['real_metrics_race'] = selected_race_gpx
+                    st.session_state['real_global_indices'] = global_indices_gpx
+
+# ---------------------------------------------
+# TAB 4: UTMB vs GPX comparison (pulls results already computed in
+# 'Runner Metrics' and 'GPX Metrics' - no new upload needed here)
+# ---------------------------------------------
+with tab_comparison:
+    st.header("⚖️ UTMB Estimate vs GPX Measurement")
+    st.caption(
+        "Compares the checkpoint-based estimate (from 'Runner Metrics') against the "
+        "GPX-measured values (from 'GPX Metrics') for the same runner and race. Load "
+        "both tabs first for the same race."
+    )
+
+    estimated_df = st.session_state.get('estimated_degradation_df')
+    estimated_race = st.session_state.get('estimated_degradation_race')
+    estimated_global = st.session_state.get('estimated_global_indices')
+
+    real_df = st.session_state.get('real_degradation_df')
+    real_race = st.session_state.get('real_metrics_race')
+    real_global = st.session_state.get('real_global_indices')
+
+    if estimated_df is None or real_df is None:
+        missing = []
+        if estimated_df is None:
+            missing.append("**'Runner Metrics'** (checkpoint-based estimate)")
+        if real_df is None:
+            missing.append("**'GPX Metrics'** (personal GPX measurement)")
+        st.info(
+            "Still missing data from: " + " and ".join(missing) +
+            ". Load the runner there first, then come back here."
+        )
+    elif estimated_race != real_race:
+        st.info(
+            f"The estimate in memory is for **'{estimated_race}'** and the GPX "
+            f"measurement is for **'{real_race}'**. Reload both tabs with the same "
+            "race selected to compare them."
+        )
+    else:
+        st.markdown(f"**Race:** {estimated_race}")
+
+        st.markdown("### 🎯 Global Indices")
+        g1, g2, g3 = st.columns(3)
+        g1.metric(
+            "🧗 VPI",
+            f"Est: {estimated_global['VPI']} vs Real: {real_global['VPI']} m/h"
+            if estimated_global.get('VPI') is not None and real_global.get('VPI') is not None else "N/A",
+        )
+        g2.metric(
+            "📉 DMI",
+            f"Est: {estimated_global['DMI']} vs Real: {real_global['DMI']} km/h"
+            if estimated_global.get('DMI') is not None and real_global.get('DMI') is not None else "N/A",
+        )
+        g3.metric(
+            "🏆 ER",
+            f"Est: {estimated_global['ER']} vs Real: {real_global['ER']}"
+            if estimated_global.get('ER') is not None and real_global.get('ER') is not None else "N/A",
+        )
+
+        st.markdown("---")
+        st.markdown("### 📊 Segment by Segment")
+
+        df_comparison = pd.merge(
+            real_df[["Segment", "Real Time (h)", "VPI Real (m/h)", "DMI Real (km/h)"]],
+            estimated_df[["Segment", "Runner Time (h)", "VPI Raw (m/h)", "DMI Raw (km/h)"]],
+            on="Segment",
+            how="outer",
+        )
+        df_comparison["VPI Diff (m/h)"] = (
+            df_comparison["VPI Real (m/h)"] - df_comparison["VPI Raw (m/h)"]
+        ).round(1)
+        df_comparison["DMI Diff (km/h)"] = (
+            df_comparison["DMI Real (km/h)"] - df_comparison["DMI Raw (km/h)"]
+        ).round(2)
+
+        st.dataframe(df_comparison, use_container_width=True)
+
+        valid_vpi_diff = df_comparison["VPI Diff (m/h)"].dropna()
+        valid_dmi_diff = df_comparison["DMI Diff (km/h)"].dropna()
+        c1, c2 = st.columns(2)
+        if not valid_vpi_diff.empty:
+            c1.metric(
+                "Average VPI error",
+                f"{valid_vpi_diff.abs().mean():.1f} m/h",
+                help="Mean absolute difference between the estimated and real VPI across segments where both exist.",
+            )
+        if not valid_dmi_diff.empty:
+            c2.metric(
+                "Average DMI error",
+                f"{valid_dmi_diff.abs().mean():.2f} km/h",
+                help="Mean absolute difference between the estimated and real DMI across segments where both exist.",
+            )
+
 with tab_methodology:
     st.header("📖 Indices & Calculation Methodology")
     st.caption(
@@ -1168,117 +1482,3 @@ with tab_methodology:
             * **Formula:** `{cfg['formula']}`
             * **Unit:** {cfg['unit']}
             """)
-
-    # ---------------------------------------------
-    # Real vs Estimated comparison (personal runner GPX)
-    # ---------------------------------------------
-    st.markdown("---")
-    st.header("🔬 Real vs Estimated Comparison")
-    st.caption(
-        "The 'Runner Metrics' tab estimates VPI/DMI per segment by allocating checkpoint "
-        "time proportionally to effort (since we only know the runner's time at each "
-        "checkpoint, not their position second by second). If you have that runner's "
-        "PERSONAL GPX track (e.g. exported from a GPS watch, with a real timestamp on "
-        "every point), upload it here to calculate the REAL, measured VPI/DMI per segment "
-        "and see how close the estimate was."
-    )
-
-    saved_races_for_compare = st.session_state.get('saved_races', {})
-    if not saved_races_for_compare:
-        st.warning(
-            "⚠️ No race loaded yet. Go to the 'Race Analysis' tab first and load a race "
-            "(so its checkpoints/segments are available here)."
-        )
-    else:
-        compare_race = st.selectbox(
-            "Which race did this runner do?",
-            options=list(saved_races_for_compare.keys()),
-            key="compare_race_selector",
-        )
-        personal_gpx_file = st.file_uploader(
-            "Runner's personal GPX (recorded activity, must include timestamps)",
-            type=["gpx", "xml"],
-            key="personal_gpx_uploader",
-        )
-        compute_real_button = st.button(
-            "🔬 Calculate real VPI/DMI from this GPX", type="primary", use_container_width=True
-        )
-
-        if compute_real_button:
-            if personal_gpx_file is None:
-                st.warning("Upload a personal GPX file first.")
-            else:
-                compare_race_data = saved_races_for_compare[compare_race]
-                compare_segments_df = compare_race_data.get("df_segments")
-
-                if compare_segments_df is None or compare_segments_df.empty:
-                    st.warning(
-                        "⚠️ The selected race doesn't have checkpoints with km loaded. "
-                        "Go back to the 'Race Analysis' tab and load them first."
-                    )
-                else:
-                    with st.spinner("Parsing personal GPX and calculating real indices..."):
-                        try:
-                            runner_gpx_df = process_runner_gpx_with_time(personal_gpx_file)
-                            df_real = calculate_real_indices_by_segment(runner_gpx_df, compare_segments_df)
-                            real_error = None
-                        except Exception:
-                            df_real = None
-                            real_error = traceback.format_exc()
-
-                    if real_error:
-                        st.error("❌ Couldn't process this GPX.")
-                        with st.expander("View technical error detail"):
-                            st.code(real_error, language="python")
-                    else:
-                        st.success("✅ Real indices calculated from the personal GPX.")
-                        st.dataframe(df_real, use_container_width=True)
-
-                        # --- Compare against the estimated table, if available for this same race ---
-                        estimated_df = st.session_state.get('estimated_degradation_df')
-                        estimated_race = st.session_state.get('estimated_degradation_race')
-
-                        if estimated_df is None:
-                            st.info(
-                                "No estimated table found yet for comparison. Go to 'Runner Metrics', "
-                                "load this same runner (via their UTMB Live link) with this same race "
-                                "selected, then come back here — the comparison will appear automatically."
-                            )
-                        elif estimated_race != compare_race:
-                            st.info(
-                                f"The last estimated table in memory was for **'{estimated_race}'**, not "
-                                f"**'{compare_race}'**. Reload the runner on 'Runner Metrics' with "
-                                f"**'{compare_race}'** selected to compare against that same race."
-                            )
-                        else:
-                            df_comparison = pd.merge(
-                                df_real[["Segment", "Real Time (h)", "VPI Real (m/h)", "DMI Real (km/h)"]],
-                                estimated_df[["Segment", "Runner Time (h)", "VPI Raw (m/h)", "DMI Raw (km/h)"]],
-                                on="Segment",
-                                how="outer",
-                            )
-                            df_comparison["VPI Diff (m/h)"] = (
-                                df_comparison["VPI Real (m/h)"] - df_comparison["VPI Raw (m/h)"]
-                            ).round(1)
-                            df_comparison["DMI Diff (km/h)"] = (
-                                df_comparison["DMI Real (km/h)"] - df_comparison["DMI Raw (km/h)"]
-                            ).round(2)
-
-                            st.markdown("##### Real vs Estimated, side by side")
-                            st.dataframe(df_comparison, use_container_width=True)
-
-                            valid_vpi_diff = df_comparison["VPI Diff (m/h)"].dropna()
-                            valid_dmi_diff = df_comparison["DMI Diff (km/h)"].dropna()
-                            c1, c2 = st.columns(2)
-                            if not valid_vpi_diff.empty:
-                                c1.metric(
-                                    "Average VPI error",
-                                    f"{valid_vpi_diff.abs().mean():.1f} m/h",
-                                    help="Mean absolute difference between the estimated and real VPI across segments where both exist.",
-                                )
-                            if not valid_dmi_diff.empty:
-                                c2.metric(
-                                    "Average DMI error",
-                                    f"{valid_dmi_diff.abs().mean():.2f} km/h",
-                                    help="Mean absolute difference between the estimated and real DMI across segments where both exist.",
-                                )
