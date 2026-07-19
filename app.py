@@ -315,20 +315,36 @@ def calculate_runner_indices(df_segments, df_runner, total_km, total_elevation_g
     return result, df_valid
 
 
-def calculate_indices_by_segment(df_segments, df_runner):
+def calculate_indices_by_segment(full_df_gpx, df_segments, df_runner):
     """Calculates VPI and DMI INDEPENDENTLY for each segment (degradation
     matrix), instead of one global value for the whole race.
 
-    Uses the SAME criterion as the global index (calculate_runner_indices):
-    a segment only gets a VPI value if its own average slope is >= 12%,
-    and a DMI value if its average slope is <= -12%. Otherwise it's marked
-    N/A (rather than diluting the result by mixing a partial GPS-point
-    filter with the segment's FULL time, which understates the true pace
-    on the qualifying terrain whenever the segment is mixed/rolling).
+    With checkpoints spaced several km apart, a segment's OWN average
+    slope rarely crosses ±12% even if it contains real steep walls mixed
+    with flatter terrain - requiring the whole segment to qualify leaves
+    the table mostly empty. Naively filtering just the steep GPS points
+    and dividing by the segment's FULL time (the very first approach)
+    dilutes the result, since most of that time was spent on the
+    non-qualifying terrain.
+
+    This version splits the difference: it allocates the runner's segment
+    time proportionally to EFFORT (distance + elevation gain/100, same
+    concept as the ER index) rather than raw distance. Steep climbing
+    points get a larger effort-weight per km than flat ones, so this
+    isn't just a wash - it estimates how much of the runner's segment
+    time was plausibly spent on the qualifying terrain, then computes a
+    real speed/vertical-rate on just that portion.
 
     Finally normalizes both indices against the runner's first valid
     segment (baseline = 100), to plot the degradation curve on a
     comparable 0-100 scale."""
+
+    full_df_gpx = full_df_gpx.sort_values("Distance (km)").reset_index(drop=True)
+    incremental_dist_km = full_df_gpx["Distance (km)"].diff()
+    incremental_elevation_m = full_df_gpx["Elevation (m)"].diff()
+    # Same effort-km definition already used for the ER index: distance +
+    # positive elevation gain / 100 (descents don't add an extra term).
+    incremental_effort_km = incremental_dist_km + incremental_elevation_m.clip(lower=0) / 100
 
     time_by_point = {
         row["Point"]: parse_time_to_hours(row.get("Cumulative Time"))
@@ -349,13 +365,30 @@ def calculate_indices_by_segment(df_segments, df_runner):
             segment_time_h = time_by_point[p_end] - time_by_point[p_start]
 
         vpi_raw, dmi_raw = None, None
-        if segment_time_h and segment_time_h > 0 and avg_slope is not None:
-            if avg_slope >= STRONG_SLOPE_THRESHOLD:
-                elevation_gain = seg["Elevation Gain (m)"]
-                vpi_raw = elevation_gain / segment_time_h if elevation_gain else None
-            elif avg_slope <= -STRONG_SLOPE_THRESHOLD:
-                segment_distance_km = seg["Segment Distance (km)"]
-                dmi_raw = segment_distance_km / segment_time_h if segment_distance_km else None
+        climb_effort_share, descent_effort_share = None, None
+
+        if segment_time_h and segment_time_h > 0:
+            segment_mask = (full_df_gpx["Distance (km)"] >= km_start) & (full_df_gpx["Distance (km)"] <= km_end)
+            total_effort_km = incremental_effort_km[segment_mask].sum()
+
+            if total_effort_km and total_effort_km > 0:
+                # --- VPI: steep-climb points within this segment ---
+                climb_mask = segment_mask & (full_df_gpx["Slope (%)"] >= STRONG_SLOPE_THRESHOLD)
+                climb_effort_km = incremental_effort_km[climb_mask].sum()
+                climb_gain_m = incremental_elevation_m[climb_mask].sum()
+                if climb_effort_km and climb_effort_km > 0 and climb_gain_m and climb_gain_m > 0:
+                    climb_effort_share = climb_effort_km / total_effort_km
+                    climb_time_h = segment_time_h * climb_effort_share
+                    vpi_raw = climb_gain_m / climb_time_h if climb_time_h > 0 else None
+
+                # --- DMI: steep-descent points within this segment ---
+                descent_mask = segment_mask & (full_df_gpx["Slope (%)"] <= -STRONG_SLOPE_THRESHOLD)
+                descent_effort_km = incremental_effort_km[descent_mask].sum()
+                descent_dist_km = incremental_dist_km[descent_mask].sum()
+                if descent_effort_km and descent_effort_km > 0 and descent_dist_km and descent_dist_km > 0:
+                    descent_effort_share = descent_effort_km / total_effort_km
+                    descent_time_h = segment_time_h * descent_effort_share
+                    dmi_raw = descent_dist_km / descent_time_h if descent_time_h > 0 else None
 
         rows.append({
             "Segment": f"P{p_start}→P{p_end}",
@@ -363,7 +396,9 @@ def calculate_indices_by_segment(df_segments, df_runner):
             "End Km": km_end,
             "Average Slope (%)": avg_slope,
             "Runner Time (h)": round(segment_time_h, 2) if segment_time_h is not None else None,
+            "Climb Effort Share (%)": round(climb_effort_share * 100, 1) if climb_effort_share is not None else None,
             "VPI Raw (m/h)": round(vpi_raw, 1) if vpi_raw is not None else None,
+            "Descent Effort Share (%)": round(descent_effort_share * 100, 1) if descent_effort_share is not None else None,
             "DMI Raw (km/h)": round(dmi_raw, 2) if dmi_raw is not None else None,
         })
 
@@ -903,14 +938,15 @@ with tab_runner:
                         )
 
                         df_segment_degradation = calculate_indices_by_segment(
-                            race_segments_df, df_runner
+                            current_race_data["df"], race_segments_df, df_runner
                         )
 
                         st.dataframe(df_segment_degradation, use_container_width=True)
                         st.caption(
-                            "Segments where the average slope is between -12% and +12% "
-                            "show N/A for VPI/DMI — they're not dominated by steep terrain, "
-                            "so a single climb/descent speed wouldn't be a meaningful number."
+                            "VPI/DMI are estimated by allocating the runner's segment time "
+                            "proportionally to effort-km (distance + gain/100) on the steep "
+                            "sub-portions of that segment. Segments with little or no steep "
+                            "terrain show N/A instead of a low-confidence number."
                         )
 
                         fig_degradation = go.Figure()
