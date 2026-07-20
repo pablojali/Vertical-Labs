@@ -270,7 +270,7 @@ def calculate_runner_indices(df_segments, df_runner, total_km, total_elevation_g
         raise ValueError("The runner table doesn't have a 'Point' column to match checkpoints.")
 
     time_by_point = {
-        row["Point"]: parse_time_to_hours(row.get("Cumulative Time"))
+        row["Point"]: parse_time_to_hours(row.get("Accumulated Time"))
         for _, row in df_runner.iterrows()
     }
 
@@ -315,11 +315,11 @@ def calculate_runner_indices(df_segments, df_runner, total_km, total_elevation_g
     df_valid["Effort Km Segment"] = df_valid["Segment Distance (km)"] + (
         df_valid["Elevation Gain (m)"].fillna(0) / 100
     )
-    df_valid["Effort Km Cumulative"] = df_valid["Effort Km Segment"].cumsum()
+    df_valid["Effort Km Accumulated"] = df_valid["Effort Km Segment"].cumsum()
     half_effort_km = total_km_e / 2
 
-    first_half = df_valid[df_valid["Effort Km Cumulative"] <= half_effort_km]
-    second_half = df_valid[df_valid["Effort Km Cumulative"] > half_effort_km]
+    first_half = df_valid[df_valid["Effort Km Accumulated"] <= half_effort_km]
+    second_half = df_valid[df_valid["Effort Km Accumulated"] > half_effort_km]
 
     def _effort_pace(segments):
         time_min = segments["Runner Time (h)"].sum() * 60
@@ -399,7 +399,7 @@ def calculate_indices_by_segment(full_df_gpx, df_segments, df_runner):
     incremental_effort_km = incremental_dist_km + incremental_elevation_m.clip(lower=0) / 100
 
     time_by_point = {
-        row["Point"]: parse_time_to_hours(row.get("Cumulative Time"))
+        row["Point"]: parse_time_to_hours(row.get("Accumulated Time"))
         for _, row in df_runner.iterrows()
     }
 
@@ -771,7 +771,7 @@ def scrape_runner_splits(url):
     # apply to a finished runner) and rename them in English.
     useful_columns = {
         "pointId": "Point",
-        "cumulatedTime": "Cumulative Time",
+        "cumulatedTime": "Accumulated Time",
         "time": "Segment Time",
         "speed": "Speed (km/h)",
         "pace": "Pace (min/km)",
@@ -1148,9 +1148,6 @@ with tab_runner:
                 c3.metric("Overall Rank", runner_info.get("Overall Rank") or "-")
                 c4.metric("Category", runner_info.get("Category") or "-")
 
-                with st.expander("View full runner profile"):
-                    st.json(runner_info)
-
                 st.markdown("##### Checkpoints / Split Times")
                 st.dataframe(df_runner, use_container_width=True)
 
@@ -1212,6 +1209,11 @@ with tab_runner:
                         # --- VPI chart ---
                         st.markdown("---")
                         st.markdown("### 🧗 VPI - Vertical Power Index")
+                        st.caption(
+                            "Vertical speed (meters of elevation gain per hour) on segments with "
+                            "slope ≥12%, segment by segment. Measures pure climbing efficiency, "
+                            "isolated from flat or rolling terrain."
+                        )
                         st.metric(
                             "VPI (whole race)",
                             f"{indices['VPI']} m/h" if indices["VPI"] is not None else "N/A",
@@ -1230,7 +1232,7 @@ with tab_runner:
                         ))
                         fig_vpi.update_layout(
                             template="plotly_dark",
-                            xaxis_title="Cumulative Km",
+                            xaxis_title="Accumulated Km",
                             yaxis_title="VPI (m/h)",
                             height=380,
                             hovermode="x unified",
@@ -1240,6 +1242,11 @@ with tab_runner:
                         # --- DMI chart ---
                         st.markdown("---")
                         st.markdown("### 📉 DMI - Descent Mastery Index")
+                        st.caption(
+                            "Average running speed (km/h) on segments with slope ≤-12%, segment "
+                            "by segment. Measures technical descending ability under quadriceps "
+                            "fatigue, isolated from flat or rolling terrain."
+                        )
                         st.metric(
                             "DMI (whole race)",
                             f"{indices['DMI']} km/h" if indices["DMI"] is not None else "N/A",
@@ -1258,7 +1265,7 @@ with tab_runner:
                         ))
                         fig_dmi.update_layout(
                             template="plotly_dark",
-                            xaxis_title="Cumulative Km",
+                            xaxis_title="Accumulated Km",
                             yaxis_title="DMI (km/h)",
                             height=380,
                             hovermode="x unified",
@@ -1302,7 +1309,7 @@ with tab_runner:
                             hovertemplate="Km %{x:.0f}<br>%{y:.2f} min/effort-km<extra></extra>",
                         ))
                         if indices.get("half_effort_km") is not None:
-                            reaches_half_effort = df_crossed["Effort Km Cumulative"] >= indices["half_effort_km"]
+                            reaches_half_effort = df_crossed["Effort Km Accumulated"] >= indices["half_effort_km"]
                             if reaches_half_effort.any():
                                 effort_midpoint_km_display = df_crossed.loc[reaches_half_effort, "End Km"].iloc[0]
                             else:
@@ -1316,7 +1323,7 @@ with tab_runner:
                             )
                         fig_er.update_layout(
                             template="plotly_dark",
-                            xaxis_title="Cumulative Km",
+                            xaxis_title="Accumulated Km",
                             yaxis_title="Effort Pace (min/effort-km)",
                             height=380,
                             hovermode="x unified",
@@ -1327,16 +1334,36 @@ with tab_runner:
                         st.markdown("---")
                         st.markdown("### 📉 Degradation Curve by Segment")
                         st.caption(
-                            "VPI and DMI calculated independently for each segment (not cumulative), "
-                            "normalized against this runner's Segment 1 (Segment 1 = 100)."
+                            "VPI, DMI and ER calculated independently for each segment (not "
+                            "cumulative), normalized against this runner's Segment 1 (Segment 1 = 100)."
                         )
+
+                        # Bring in the per-segment Effort Pace (from the ER chart's data) so
+                        # ER can be shown in this same table/chart, on the same 0-100 scale.
+                        df_segment_degradation = df_segment_degradation.merge(
+                            df_crossed[["Start Km", "End Km", "Effort Pace (min/effort-km)"]],
+                            on=["Start Km", "End Km"],
+                            how="left",
+                        )
+                        # ER Index is inverted vs VPI/DMI: a LOWER pace is better, so we flip the
+                        # ratio (baseline/segment instead of segment/baseline) to keep the same
+                        # "higher = better, dropping = fatigue" reading across all three lines.
+                        valid_pace = df_segment_degradation["Effort Pace (min/effort-km)"].dropna()
+                        if not valid_pace.empty and valid_pace.iloc[0]:
+                            pace_baseline = valid_pace.iloc[0]
+                            df_segment_degradation["ER Index (0-100)"] = (
+                                (pace_baseline / df_segment_degradation["Effort Pace (min/effort-km)"]) * 100
+                            ).round(1)
+                        else:
+                            df_segment_degradation["ER Index (0-100)"] = None
 
                         st.dataframe(df_segment_degradation, use_container_width=True)
                         st.caption(
                             "VPI/DMI are estimated by allocating the runner's segment time "
                             "proportionally to effort-km (distance + gain/100) on the steep "
                             "sub-portions of that segment. Segments with little or no steep "
-                            "terrain show N/A instead of a low-confidence number."
+                            "terrain show N/A instead of a low-confidence number. ER Index is "
+                            "the inverse of effort pace, so it reads on the same scale as VPI/DMI."
                         )
 
                         fig_degradation = go.Figure()
@@ -1359,9 +1386,18 @@ with tab_runner:
                             text=df_segment_degradation["Segment"],
                             hovertemplate="%{text}<br>Km %{x:.0f}<br>DMI Index: %{y:.1f}<extra></extra>",
                         ))
+                        fig_degradation.add_trace(go.Scatter(
+                            x=df_segment_degradation["End Km"],
+                            y=df_segment_degradation["ER Index (0-100)"],
+                            mode="lines+markers",
+                            name="ER (Endurance)",
+                            line=dict(color="#c084fc", width=3),
+                            text=df_segment_degradation["Segment"],
+                            hovertemplate="%{text}<br>Km %{x:.0f}<br>ER Index: %{y:.1f}<extra></extra>",
+                        ))
                         fig_degradation.update_layout(
                             template="plotly_dark",
-                            xaxis_title="Cumulative Km",
+                            xaxis_title="Accumulated Km",
                             yaxis_title="Index (0-100, Segment 1 = 100)",
                             height=420,
                             hovermode="x unified",
@@ -1495,7 +1531,7 @@ with tab_gpx:
                     )
 
                     df_segment_gpx_sorted = df_segment_gpx.sort_values("Start Km").reset_index(drop=True)
-                    df_segment_gpx_sorted["Effort Km Cumulative"] = df_segment_gpx_sorted["Effort Km Segment"].cumsum()
+                    df_segment_gpx_sorted["Effort Km Accumulated"] = df_segment_gpx_sorted["Effort Km Segment"].cumsum()
 
                     fig_er_gpx = go.Figure()
                     fig_er_gpx.add_trace(go.Scatter(
@@ -1516,7 +1552,7 @@ with tab_gpx:
                         )
                     fig_er_gpx.update_layout(
                         template="plotly_dark",
-                        xaxis_title="Cumulative Km",
+                        xaxis_title="Accumulated Km",
                         yaxis_title="Effort Pace (min/effort-km)",
                         height=380,
                         hovermode="x unified",
@@ -1553,7 +1589,7 @@ with tab_gpx:
                     ))
                     fig_gpx_degradation.update_layout(
                         template="plotly_dark",
-                        xaxis_title="Cumulative Km",
+                        xaxis_title="Accumulated Km",
                         yaxis_title="Index (0-100, Segment 1 = 100)",
                         height=420,
                         hovermode="x unified",
