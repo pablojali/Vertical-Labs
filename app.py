@@ -299,6 +299,10 @@ def calculate_runner_indices(df_segments, df_runner, total_km, total_elevation_g
     pace_1 = _effort_pace(first_half)
     pace_2 = _effort_pace(second_half)
 
+    df_valid["Effort Pace (min/effort-km)"] = (
+        (df_valid["Runner Time (h)"] * 60) / df_valid["Effort Km Segment"]
+    ).round(2)
+
     if pace_1 and pace_2 and pace_1 > 0:
         pacing_decay_pct = ((pace_2 / pace_1) - 1) * 100
         er = 100 - (pacing_decay_pct * distance_weighting_coef)
@@ -312,6 +316,9 @@ def calculate_runner_indices(df_segments, df_runner, total_km, total_elevation_g
         "ER": round(er, 1) if er is not None else None,
         "Pacing_Decay_%": round(pacing_decay_pct, 1) if pacing_decay_pct is not None else None,
         "unmatched_segments": int(unmatched_segments),
+        "effort_pace_first_half": round(pace_1, 2) if pace_1 is not None else None,
+        "effort_pace_second_half": round(pace_2, 2) if pace_2 is not None else None,
+        "half_effort_km": half_effort_km,
     }
     return result, df_valid
 
@@ -528,6 +535,7 @@ def calculate_real_indices_by_segment(runner_gpx_df, df_segments, window_m=500):
     for i, seg in sorted_segments.iterrows():
         p_start, p_end = seg["Start Point"], seg["End Point"]
         km_start, km_end = seg["Start Km"], seg["End Km"]
+        effort_km_segment = seg["Segment Distance (km)"] + (seg.get("Elevation Gain (m)") or 0) / 100
 
         segment_windows = windows[
             (windows["Window Start Km"] >= km_start) & (windows["Window End Km"] <= km_end)
@@ -541,6 +549,8 @@ def calculate_real_indices_by_segment(runner_gpx_df, df_segments, window_m=500):
                 "Real Time (h)": None,
                 "VPI Real (m/h)": None,
                 "DMI Real (km/h)": None,
+                "Effort Km Segment": effort_km_segment,
+                "Effort Pace (min/effort-km)": None,
             })
             continue
 
@@ -556,6 +566,11 @@ def calculate_real_indices_by_segment(runner_gpx_df, df_segments, window_m=500):
         descent_time_h = descent_windows["Window Time (h)"].sum()
         dmi_real = (descent_dist_km / descent_time_h) if descent_time_h and descent_time_h > 0 and descent_dist_km > 0 else None
 
+        effort_pace = (
+            (real_segment_time_h * 60) / effort_km_segment
+            if effort_km_segment and effort_km_segment > 0 else None
+        )
+
         rows.append({
             "Segment": f"P{p_start}→P{p_end}",
             "Start Km": km_start,
@@ -563,6 +578,8 @@ def calculate_real_indices_by_segment(runner_gpx_df, df_segments, window_m=500):
             "Real Time (h)": round(real_segment_time_h, 2) if real_segment_time_h is not None else None,
             "VPI Real (m/h)": round(vpi_real, 1) if vpi_real is not None else None,
             "DMI Real (km/h)": round(dmi_real, 2) if dmi_real is not None else None,
+            "Effort Km Segment": round(effort_km_segment, 2) if effort_km_segment is not None else None,
+            "Effort Pace (min/effort-km)": round(effort_pace, 2) if effort_pace is not None else None,
         })
 
     return pd.DataFrame(rows)
@@ -607,24 +624,31 @@ def calculate_global_real_indices(runner_gpx_df, official_df_gpx, total_km, tota
 
     effort_dist = calculate_effort_distribution(official_df_gpx, total_km, total_elevation_gain)
     effort_midpoint_km = effort_dist["effort_midpoint_km"]
+    total_km_e = total_km + (total_elevation_gain / 100)
+    half_effort_km = total_km_e / 2
 
     time_at_midpoint_h = interpolate_time_at_km(runner_gpx_df, effort_midpoint_km)
     total_time_h = float(runner_gpx_df["Elapsed Time (h)"].max())
 
-    er, pacing_decay_pct = None, None
+    er, pacing_decay_pct, pace_1, pace_2 = None, None, None, None
     if time_at_midpoint_h is not None:
         time_first_half_h = time_at_midpoint_h
         time_second_half_h = total_time_h - time_at_midpoint_h
         # By construction, both halves represent ~50% of total effort-km
         # each, so the pacing comparison reduces to the real time ratio.
-        if time_first_half_h > 0 and time_second_half_h > 0:
-            pacing_decay_pct = ((time_second_half_h / time_first_half_h) - 1) * 100
+        if time_first_half_h > 0 and time_second_half_h > 0 and half_effort_km > 0:
+            pace_1 = (time_first_half_h * 60) / half_effort_km
+            pace_2 = (time_second_half_h * 60) / half_effort_km
+            pacing_decay_pct = ((pace_2 / pace_1) - 1) * 100
             er = 100 - (pacing_decay_pct * distance_weighting_coef)
 
     return {
         "VPI": round(vpi, 1) if vpi is not None else None,
         "DMI": round(dmi, 2) if dmi is not None else None,
         "ER": round(er, 1) if er is not None else None,
+        "effort_pace_first_half": round(pace_1, 2) if pace_1 is not None else None,
+        "effort_pace_second_half": round(pace_2, 2) if pace_2 is not None else None,
+        "effort_midpoint_km": effort_midpoint_km,
         "Pacing_Decay_%": round(pacing_decay_pct, 1) if pacing_decay_pct is not None else None,
         "total_time_h": total_time_h,
         "total_distance_km": float(runner_gpx_df["Distance (km)"].max()),
@@ -1141,6 +1165,58 @@ with tab_runner:
                         with st.expander("View crossed segments (race + runner times)"):
                             st.dataframe(df_crossed, use_container_width=True)
 
+                        # --- ER calculation visualized ---
+                        st.markdown("---")
+                        st.markdown("### 🏆 Endurance Rating - Pacing Curve")
+                        st.caption(
+                            "Effort pace (minutes per effort-km, where effort-km = distance + "
+                            "elevation gain/100) segment by segment. ER compares the average pace "
+                            "of the two halves, split at the point where the course reaches 50% "
+                            "of its total effort — not the halfway point by raw distance."
+                        )
+                        pe1, pe2 = st.columns(2)
+                        pe1.metric(
+                            "First Half Pace",
+                            f"{indices['effort_pace_first_half']} min/effort-km"
+                            if indices.get("effort_pace_first_half") is not None else "N/A",
+                        )
+                        pe2.metric(
+                            "Second Half Pace",
+                            f"{indices['effort_pace_second_half']} min/effort-km"
+                            if indices.get("effort_pace_second_half") is not None else "N/A",
+                        )
+
+                        fig_er = go.Figure()
+                        fig_er.add_trace(go.Scatter(
+                            x=df_crossed["End Km"],
+                            y=df_crossed["Effort Pace (min/effort-km)"],
+                            mode="lines+markers",
+                            name="Effort Pace",
+                            line=dict(color="#c084fc", width=3),
+                            hovertemplate="Km %{x:.0f}<br>%{y:.2f} min/effort-km<extra></extra>",
+                        ))
+                        if indices.get("half_effort_km") is not None:
+                            reaches_half_effort = df_crossed["Effort Km Cumulative"] >= indices["half_effort_km"]
+                            if reaches_half_effort.any():
+                                effort_midpoint_km_display = df_crossed.loc[reaches_half_effort, "End Km"].iloc[0]
+                            else:
+                                effort_midpoint_km_display = current_race_data["total_km"] / 2
+                            fig_er.add_vline(
+                                x=effort_midpoint_km_display,
+                                line_dash="dash",
+                                line_color="#a78bfa",
+                                annotation_text="50% effort",
+                                annotation_position="top",
+                            )
+                        fig_er.update_layout(
+                            template="plotly_dark",
+                            xaxis_title="Cumulative Km",
+                            yaxis_title="Effort Pace (min/effort-km)",
+                            height=380,
+                            hovermode="x unified",
+                        )
+                        st.plotly_chart(fig_er, use_container_width=True)
+
                         # --- Degradation matrix by segment ---
                         st.markdown("---")
                         st.markdown("### 📉 Degradation Curve by Segment")
@@ -1324,6 +1400,55 @@ with tab_gpx:
                         f"{global_indices_gpx['ER']}" if global_indices_gpx["ER"] is not None else "N/A",
                         help="Uses the runner's REAL elapsed time before/after the course's effort-km midpoint.",
                     )
+
+                    # --- ER calculation visualized (measured) ---
+                    st.markdown("---")
+                    st.markdown("### 🏆 Endurance Rating - Pacing Curve (measured)")
+                    st.caption(
+                        "Effort pace (minutes per effort-km) segment by segment, measured directly "
+                        "from the personal GPX. Same split logic as 'Runner Metrics': divided at the "
+                        "point where the course reaches 50% of its total effort."
+                    )
+                    pe1, pe2 = st.columns(2)
+                    pe1.metric(
+                        "First Half Pace (measured)",
+                        f"{global_indices_gpx['effort_pace_first_half']} min/effort-km"
+                        if global_indices_gpx.get("effort_pace_first_half") is not None else "N/A",
+                    )
+                    pe2.metric(
+                        "Second Half Pace (measured)",
+                        f"{global_indices_gpx['effort_pace_second_half']} min/effort-km"
+                        if global_indices_gpx.get("effort_pace_second_half") is not None else "N/A",
+                    )
+
+                    df_segment_gpx_sorted = df_segment_gpx.sort_values("Start Km").reset_index(drop=True)
+                    df_segment_gpx_sorted["Effort Km Cumulative"] = df_segment_gpx_sorted["Effort Km Segment"].cumsum()
+
+                    fig_er_gpx = go.Figure()
+                    fig_er_gpx.add_trace(go.Scatter(
+                        x=df_segment_gpx_sorted["End Km"],
+                        y=df_segment_gpx_sorted["Effort Pace (min/effort-km)"],
+                        mode="lines+markers",
+                        name="Effort Pace (measured)",
+                        line=dict(color="#c084fc", width=3),
+                        hovertemplate="Km %{x:.0f}<br>%{y:.2f} min/effort-km<extra></extra>",
+                    ))
+                    if global_indices_gpx.get("effort_midpoint_km") is not None:
+                        fig_er_gpx.add_vline(
+                            x=global_indices_gpx["effort_midpoint_km"],
+                            line_dash="dash",
+                            line_color="#a78bfa",
+                            annotation_text="50% effort",
+                            annotation_position="top",
+                        )
+                    fig_er_gpx.update_layout(
+                        template="plotly_dark",
+                        xaxis_title="Cumulative Km",
+                        yaxis_title="Effort Pace (min/effort-km)",
+                        height=380,
+                        hovermode="x unified",
+                    )
+                    st.plotly_chart(fig_er_gpx, use_container_width=True)
 
                     # --- Degradation curve by segment (measured) ---
                     st.markdown("---")
