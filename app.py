@@ -122,6 +122,36 @@ def resample_for_chart(df_gpx, step_m=200):
     return resampled
 
 
+def add_elevation_background(fig, race_df, step_m=200):
+    """Adds the race's elevation profile as a subtle background layer on
+    an existing Plotly figure, using a secondary (right-side) y-axis, so
+    an index line plotted on the primary axis can be visually compared
+    against the terrain (e.g. a big final climb dragging VPI down).
+    Must be called BEFORE adding the main index trace, so it renders
+    behind it."""
+    df_chart = resample_for_chart(race_df, step_m=step_m)
+    fig.add_trace(go.Scatter(
+        x=df_chart["Distance (km)"],
+        y=df_chart["Elevation (m)"],
+        mode='lines',
+        name='Elevation Profile',
+        line=dict(color='rgba(160,160,160,0.5)', width=1),
+        fill='tozeroy',
+        fillcolor='rgba(90,90,90,0.18)',
+        yaxis='y2',
+        hoverinfo='skip',
+        showlegend=False,
+    ))
+    fig.update_layout(
+        yaxis2=dict(
+            title="Elevation (m)",
+            overlaying="y",
+            side="right",
+            showgrid=False,
+        )
+    )
+
+
 def match_checkpoints_with_gpx(df_gpx, checkpoints_km):
     """Receives the already-analyzed GPX DataFrame and a list of checkpoints
     [{'point': int, 'km': float}, ...] and returns a DataFrame with one row
@@ -1111,11 +1141,32 @@ with tab_runner:
             else:
                 st.success("✅ Runner data fetched successfully!")
 
+                # --- Runner card (moved before the performance indices) ---
+                c1, c2, c3, c4 = st.columns(4)
+                c1.metric("Runner", runner_info.get("Name") or "-")
+                c2.metric("Finish Time", runner_info.get("Finish Time") or "-")
+                c3.metric("Overall Rank", runner_info.get("Overall Rank") or "-")
+                c4.metric("Category", runner_info.get("Category") or "-")
+
+                with st.expander("View full runner profile"):
+                    st.json(runner_info)
+
+                st.markdown("##### Checkpoints / Split Times")
+                st.dataframe(df_runner, use_container_width=True)
+
+                # Save for reuse in other tabs (including which race was
+                # chosen, for the VPI/DMI/ER calculation)
+                st.session_state['runner_metrics_df'] = df_runner
+                st.session_state['runner_info'] = runner_info
+                st.session_state['race_selected_for_runner'] = selected_race
+
                 # --- VPI / DMI / ER index calculation ---
                 # Requires the selected race to have checkpoints with km
                 # loaded on Tab 1 (df_segments).
                 current_race_data = available_races.get(selected_race, {}) if selected_race else {}
                 race_segments_df = current_race_data.get("df_segments")
+
+                st.markdown("---")
 
                 if race_segments_df is None or race_segments_df.empty:
                     st.warning(
@@ -1132,31 +1183,18 @@ with tab_runner:
                             current_race_data["total_km"],
                             total_race_gain,
                         )
+                        df_segment_degradation = calculate_indices_by_segment(
+                            current_race_data["df"], race_segments_df, df_runner
+                        )
                         indices_error = None
                     except Exception as e:
-                        indices, df_crossed = None, None
+                        indices, df_crossed, df_segment_degradation = None, None, None
                         indices_error = str(e)
 
-                    st.markdown("### 🎯 Performance Indices")
+                    st.markdown("## 🎯 Performance Indices")
                     if indices_error:
                         st.error(f"❌ Couldn't calculate the indices: {indices_error}")
                     else:
-                        i1, i2, i3 = st.columns(3)
-                        i1.metric(
-                            "🧗 VPI - Climbing Efficiency",
-                            f"{indices['VPI']} m/h" if indices["VPI"] is not None else "N/A",
-                            help="Vertical Power Index: meters of elevation gain per hour on segments with slope ≥12%.",
-                        )
-                        i2.metric(
-                            "📉 DMI - Descent Mastery",
-                            f"{indices['DMI']} km/h" if indices["DMI"] is not None else "N/A",
-                            help="Descent Mastery Index: average speed on segments with slope ≤-12%.",
-                        )
-                        i3.metric(
-                            "🏆 ER - Endurance Rating",
-                            f"{indices['ER']}" if indices["ER"] is not None else "N/A",
-                            help="Endurance Rating: 100 = stable pace, lower values indicate fatigue-driven degradation.",
-                        )
                         if indices["unmatched_segments"] > 0:
                             st.caption(
                                 f"⚠️ {indices['unmatched_segments']} race segment(s) had no "
@@ -1165,16 +1203,83 @@ with tab_runner:
                         with st.expander("View crossed segments (race + runner times)"):
                             st.dataframe(df_crossed, use_container_width=True)
 
-                        # --- ER calculation visualized ---
+                        # Saved so the 'UTMB vs GPX' tab can compare this
+                        # estimate against a runner's real, timestamped personal GPX.
+                        st.session_state['estimated_degradation_df'] = df_segment_degradation
+                        st.session_state['estimated_degradation_race'] = selected_race
+                        st.session_state['estimated_global_indices'] = indices
+
+                        # --- VPI chart ---
                         st.markdown("---")
-                        st.markdown("### 🏆 Endurance Rating - Pacing Curve")
+                        st.markdown("### 🧗 VPI - Vertical Power Index")
+                        st.metric(
+                            "VPI (whole race)",
+                            f"{indices['VPI']} m/h" if indices["VPI"] is not None else "N/A",
+                            help="Vertical Power Index: meters of elevation gain per hour on segments with slope ≥12%.",
+                        )
+                        fig_vpi = go.Figure()
+                        add_elevation_background(fig_vpi, current_race_data["df"])
+                        fig_vpi.add_trace(go.Scatter(
+                            x=df_segment_degradation["End Km"],
+                            y=df_segment_degradation["VPI Raw (m/h)"],
+                            mode="lines+markers",
+                            name="VPI (m/h)",
+                            line=dict(color="#22d3ee", width=3),
+                            text=df_segment_degradation["Segment"],
+                            hovertemplate="%{text}<br>Km %{x:.0f}<br>VPI: %{y:.0f} m/h<extra></extra>",
+                        ))
+                        fig_vpi.update_layout(
+                            template="plotly_dark",
+                            xaxis_title="Cumulative Km",
+                            yaxis_title="VPI (m/h)",
+                            height=380,
+                            hovermode="x unified",
+                        )
+                        st.plotly_chart(fig_vpi, use_container_width=True)
+
+                        # --- DMI chart ---
+                        st.markdown("---")
+                        st.markdown("### 📉 DMI - Descent Mastery Index")
+                        st.metric(
+                            "DMI (whole race)",
+                            f"{indices['DMI']} km/h" if indices["DMI"] is not None else "N/A",
+                            help="Descent Mastery Index: average speed on segments with slope ≤-12%.",
+                        )
+                        fig_dmi = go.Figure()
+                        add_elevation_background(fig_dmi, current_race_data["df"])
+                        fig_dmi.add_trace(go.Scatter(
+                            x=df_segment_degradation["End Km"],
+                            y=df_segment_degradation["DMI Raw (km/h)"],
+                            mode="lines+markers",
+                            name="DMI (km/h)",
+                            line=dict(color="#ffa500", width=3),
+                            text=df_segment_degradation["Segment"],
+                            hovertemplate="%{text}<br>Km %{x:.0f}<br>DMI: %{y:.2f} km/h<extra></extra>",
+                        ))
+                        fig_dmi.update_layout(
+                            template="plotly_dark",
+                            xaxis_title="Cumulative Km",
+                            yaxis_title="DMI (km/h)",
+                            height=380,
+                            hovermode="x unified",
+                        )
+                        st.plotly_chart(fig_dmi, use_container_width=True)
+
+                        # --- ER chart ---
+                        st.markdown("---")
+                        st.markdown("### 🏆 ER - Endurance Rating - Pacing Curve")
                         st.caption(
                             "Effort pace (minutes per effort-km, where effort-km = distance + "
                             "elevation gain/100) segment by segment. ER compares the average pace "
                             "of the two halves, split at the point where the course reaches 50% "
                             "of its total effort — not the halfway point by raw distance."
                         )
-                        pe1, pe2 = st.columns(2)
+                        m1, pe1, pe2 = st.columns(3)
+                        m1.metric(
+                            "ER (whole race)",
+                            f"{indices['ER']}" if indices["ER"] is not None else "N/A",
+                            help="Endurance Rating: 100 = stable pace, lower values indicate fatigue-driven degradation.",
+                        )
                         pe1.metric(
                             "First Half Pace",
                             f"{indices['effort_pace_first_half']} min/effort-km"
@@ -1187,6 +1292,7 @@ with tab_runner:
                         )
 
                         fig_er = go.Figure()
+                        add_elevation_background(fig_er, current_race_data["df"])
                         fig_er.add_trace(go.Scatter(
                             x=df_crossed["End Km"],
                             y=df_crossed["Effort Pace (min/effort-km)"],
@@ -1217,16 +1323,12 @@ with tab_runner:
                         )
                         st.plotly_chart(fig_er, use_container_width=True)
 
-                        # --- Degradation matrix by segment ---
+                        # --- Degradation matrix by segment (combined VPI+DMI, normalized) ---
                         st.markdown("---")
                         st.markdown("### 📉 Degradation Curve by Segment")
                         st.caption(
                             "VPI and DMI calculated independently for each segment (not cumulative), "
                             "normalized against this runner's Segment 1 (Segment 1 = 100)."
-                        )
-
-                        df_segment_degradation = calculate_indices_by_segment(
-                            current_race_data["df"], race_segments_df, df_runner
                         )
 
                         st.dataframe(df_segment_degradation, use_container_width=True)
@@ -1237,13 +1339,8 @@ with tab_runner:
                             "terrain show N/A instead of a low-confidence number."
                         )
 
-                        # Saved so the 'Indices & Methodology' tab can compare this
-                        # estimate against a runner's real, timestamped personal GPX.
-                        st.session_state['estimated_degradation_df'] = df_segment_degradation
-                        st.session_state['estimated_degradation_race'] = selected_race
-                        st.session_state['estimated_global_indices'] = indices
-
                         fig_degradation = go.Figure()
+                        add_elevation_background(fig_degradation, current_race_data["df"])
                         fig_degradation.add_trace(go.Scatter(
                             x=df_segment_degradation["End Km"],
                             y=df_segment_degradation["VPI Index (0-100)"],
@@ -1271,30 +1368,6 @@ with tab_runner:
                         )
                         st.plotly_chart(fig_degradation, use_container_width=True)
 
-                st.markdown("---")
-
-                # Runner card
-                c1, c2, c3, c4 = st.columns(4)
-                c1.metric("Runner", runner_info.get("Name") or "-")
-                c2.metric("Finish Time", runner_info.get("Finish Time") or "-")
-                c3.metric("Overall Rank", runner_info.get("Overall Rank") or "-")
-                c4.metric("Category", runner_info.get("Category") or "-")
-
-                with st.expander("View full runner profile"):
-                    st.json(runner_info)
-
-                st.markdown("##### Checkpoints / Split Times")
-                st.dataframe(df_runner, use_container_width=True)
-
-                # Save for reuse in other tabs (including which race was
-                # chosen, for the VPI/DMI/ER calculation)
-                st.session_state['runner_metrics_df'] = df_runner
-                st.session_state['runner_info'] = runner_info
-                st.session_state['race_selected_for_runner'] = selected_race
-
-# ---------------------------------------------
-# TAB 3: Indices and methodology documentation
-# ---------------------------------------------
 # ---------------------------------------------
 # TAB 3: GPX Metrics (mirrors Runner Metrics, but measured directly
 # from the runner's personal, timestamped GPX instead of UTMB Live)
