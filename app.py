@@ -18,7 +18,7 @@ from data.gpx_loader import (
 # 1. Page configuration - VertLabs style
 st.set_page_config(page_title="VertLabs - Trail Analytics", page_icon="🏃‍♂️", layout="wide")
 
-st.title("🏃‍♂️ VertLabs - Race Analysis Engine")
+st.title("🏃‍♂️ VertLabs - Terrain Intelligence Engine v1.0")
 st.caption("Analysis backend: GPX geometric segmentation + official runner metrics.")
 st.markdown("---")
 
@@ -1403,6 +1403,50 @@ with tab_runner:
                             hovermode="x unified",
                         )
                         st.plotly_chart(fig_degradation, use_container_width=True)
+
+                        # --- Full summary table: everything condensed into one row per checkpoint ---
+                        st.markdown("---")
+                        st.markdown("### 📋 Full Summary Table")
+                        st.caption(
+                            "One row per checkpoint, combining the official segment geometry, "
+                            "this runner's raw split data, and the calculated VPI/DMI for that "
+                            "segment — ready to paste into Excel alongside other runners."
+                        )
+
+                        df_summary = race_segments_df[[
+                            "End Point", "Segment Distance (km)", "Elevation Gain (m)",
+                            "Elevation Loss (m)", "Average Slope (%)", "Start Km", "End Km",
+                        ]].copy()
+
+                        df_summary = df_summary.merge(
+                            df_segment_degradation[["Start Km", "End Km", "VPI Raw (m/h)", "DMI Raw (km/h)"]],
+                            on=["Start Km", "End Km"],
+                            how="left",
+                        )
+
+                        df_summary = df_summary.merge(
+                            df_runner[["Point", "Speed (km/h)", "Pace (min/km)", "Rank", "Rest", "Segment Time"]],
+                            left_on="End Point",
+                            right_on="Point",
+                            how="left",
+                        )
+
+                        df_summary = df_summary.rename(columns={
+                            "End Point": "Checkpoint",
+                            "Speed (km/h)": "Speed",
+                            "Pace (min/km)": "Pace",
+                            "Segment Time": "Time",
+                            "VPI Raw (m/h)": "VPI",
+                            "DMI Raw (km/h)": "DMI",
+                        })
+
+                        df_summary = df_summary[[
+                            "Checkpoint", "Segment Distance (km)", "Elevation Gain (m)",
+                            "Elevation Loss (m)", "Average Slope (%)", "Speed", "Pace",
+                            "Rank", "Rest", "Time", "VPI", "DMI",
+                        ]]
+
+                        st.dataframe(df_summary, use_container_width=True, hide_index=True)
 
 # ---------------------------------------------
 # TAB 3: GPX Metrics (mirrors Runner Metrics, but measured directly
