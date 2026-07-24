@@ -1900,6 +1900,52 @@ with tab_top:
                             use_container_width=True,
                         )
 
+                        # --- Position progression chart ---
+                        st.markdown("---")
+                        st.markdown("### 📈 Position Progression")
+                        st.caption(
+                            "Each runner's rank at every checkpoint, connected across the race. "
+                            "The Y axis starts with the largest (worst) position at the top and "
+                            "ends at 1st place at the bottom, over the course's elevation profile."
+                        )
+
+                        checkpoint_to_km = dict(zip(
+                            race_segments_df_top["End Point"], race_segments_df_top["End Km"]
+                        ))
+
+                        fig_positions = go.Figure()
+                        add_elevation_background(fig_positions, race_data_top["df"])
+
+                        worst_rank_seen = 0
+                        for label, df_summary_bib in results.items():
+                            df_plot = df_summary_bib[["Checkpoint", "Rank"]].dropna(subset=["Rank"]).copy()
+                            df_plot["Km"] = df_plot["Checkpoint"].map(checkpoint_to_km)
+                            df_plot = df_plot.dropna(subset=["Km"]).sort_values("Km")
+                            if df_plot.empty:
+                                continue
+                            worst_rank_seen = max(worst_rank_seen, df_plot["Rank"].astype(float).max())
+                            fig_positions.add_trace(go.Scatter(
+                                x=df_plot["Km"],
+                                y=df_plot["Rank"],
+                                mode="lines+markers",
+                                name=label,
+                                hovertemplate=f"{label}<br>Km %{{x:.0f}}<br>Position: %{{y}}<extra></extra>",
+                            ))
+
+                        fig_positions.update_layout(
+                            template="plotly_dark",
+                            xaxis_title="Accumulated Km",
+                            yaxis_title="Position",
+                            height=480,
+                            hovermode="closest",
+                            yaxis=dict(
+                                autorange=False,
+                                range=[0, worst_rank_seen + 1],
+                                dtick=1,
+                            ),
+                        )
+                        st.plotly_chart(fig_positions, use_container_width=True)
+
 with tab_methodology:
     st.header("📖 Indices & Calculation Methodology")
     st.caption(
