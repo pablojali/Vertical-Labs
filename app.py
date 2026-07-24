@@ -4,6 +4,7 @@ import numpy as np
 import plotly.graph_objects as go
 import gpxpy
 import re
+import io
 import traceback
 import requests
 from trail_metrics_config import INDEX_CONFIG, SPEED_METRICS, display_metric_documentation
@@ -714,24 +715,12 @@ def extract_tenant(url):
     return None
 
 
-def scrape_runner_splits(url):
-    runner_id = extract_runner_id(url)
-    if not runner_id:
-        raise ValueError(
-            "Couldn't find the runner ID in that URL. "
-            "Make sure it has the format '.../runners/<number>' "
-            "(e.g. https://live.utmb.world/aranbyutmb/2026/runners/5)."
-        )
-
-    tenant = extract_tenant(url)
-    if not tenant:
-        raise ValueError(
-            "Couldn't identify the race/year in that URL. "
-            "Make sure it has the format "
-            "'https://live.utmb.world/<race>/<year>/runners/<number>'."
-        )
-
-    api_url = f"https://utmblive-api.utmb.world/runners/{runner_id}?locale=en"
+def fetch_runner_by_tenant_and_bib(tenant, bib):
+    """Calls the UTMB Live API directly given a tenant (e.g. 'aranbyutmb_2026')
+    and a bib number, without needing a full runner URL. Used both by
+    scrape_runner_splits (which derives the tenant from a URL) and by the
+    'Top Runners' tab (which reuses one known tenant for several bibs)."""
+    api_url = f"https://utmblive-api.utmb.world/runners/{bib}?locale=en"
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
         "Accept": "*/*",
@@ -784,6 +773,67 @@ def scrape_runner_splits(url):
     return runner_info, df_passings
 
 
+def scrape_runner_splits(url):
+    runner_id = extract_runner_id(url)
+    if not runner_id:
+        raise ValueError(
+            "Couldn't find the runner ID in that URL. "
+            "Make sure it has the format '.../runners/<number>' "
+            "(e.g. https://live.utmb.world/aranbyutmb/2026/runners/5)."
+        )
+
+    tenant = extract_tenant(url)
+    if not tenant:
+        raise ValueError(
+            "Couldn't identify the race/year in that URL. "
+            "Make sure it has the format "
+            "'https://live.utmb.world/<race>/<year>/runners/<number>'."
+        )
+
+    return fetch_runner_by_tenant_and_bib(tenant, runner_id)
+
+
+def build_summary_table(race_segments_df, df_segment_degradation, df_runner):
+    """Builds the unified, Excel-ready summary table: one row per
+    checkpoint, combining the official segment geometry (Tab 1), this
+    runner's raw split data (from UTMB Live), and the calculated VPI/DMI
+    for that segment. Shared by 'Runner Metrics' (single runner) and
+    'Top Runners' (several runners side by side)."""
+    df_summary = race_segments_df[[
+        "End Point", "Segment Distance (km)", "Elevation Gain (m)",
+        "Elevation Loss (m)", "Average Slope (%)", "Start Km", "End Km",
+    ]].copy()
+
+    df_summary = df_summary.merge(
+        df_segment_degradation[["Start Km", "End Km", "VPI Raw (m/h)", "DMI Raw (km/h)"]],
+        on=["Start Km", "End Km"],
+        how="left",
+    )
+
+    df_summary = df_summary.merge(
+        df_runner[["Point", "Speed (km/h)", "Pace (min/km)", "Rank", "Rest", "Segment Time"]],
+        left_on="End Point",
+        right_on="Point",
+        how="left",
+    )
+
+    df_summary = df_summary.rename(columns={
+        "End Point": "Checkpoint",
+        "Speed (km/h)": "Speed",
+        "Pace (min/km)": "Pace",
+        "Segment Time": "Time",
+        "VPI Raw (m/h)": "VPI",
+        "DMI Raw (km/h)": "DMI",
+    })
+
+    return df_summary[[
+        "Checkpoint", "Segment Distance (km)", "Elevation Gain (m)",
+        "Elevation Loss (m)", "Average Slope (%)", "Speed", "Pace",
+        "Rank", "Rest", "Time", "VPI", "DMI",
+    ]]
+
+
+
 # ============================================================
 # 3. INTERFACE: three independent tabs
 # ============================================================
@@ -793,8 +843,9 @@ def scrape_runner_splits(url):
 if 'saved_races' not in st.session_state:
     st.session_state['saved_races'] = {}
 
-tab_race, tab_runner, tab_gpx, tab_comparison, tab_methodology = st.tabs(
-    ["🗺️ Race Analysis", "🏃 Runner Metrics", "🛰️ GPX Metrics", "⚖️ UTMB vs GPX", "📖 Indices & Methodology"]
+tab_race, tab_runner, tab_gpx, tab_comparison, tab_top, tab_methodology = st.tabs(
+    ["🗺️ Race Analysis", "🏃 Runner Metrics", "🛰️ GPX Metrics", "⚖️ UTMB vs GPX",
+     "🏆 Top Runners", "📖 Indices & Methodology"]
 )
 
 # ---------------------------------------------
@@ -1413,38 +1464,7 @@ with tab_runner:
                             "segment — ready to paste into Excel alongside other runners."
                         )
 
-                        df_summary = race_segments_df[[
-                            "End Point", "Segment Distance (km)", "Elevation Gain (m)",
-                            "Elevation Loss (m)", "Average Slope (%)", "Start Km", "End Km",
-                        ]].copy()
-
-                        df_summary = df_summary.merge(
-                            df_segment_degradation[["Start Km", "End Km", "VPI Raw (m/h)", "DMI Raw (km/h)"]],
-                            on=["Start Km", "End Km"],
-                            how="left",
-                        )
-
-                        df_summary = df_summary.merge(
-                            df_runner[["Point", "Speed (km/h)", "Pace (min/km)", "Rank", "Rest", "Segment Time"]],
-                            left_on="End Point",
-                            right_on="Point",
-                            how="left",
-                        )
-
-                        df_summary = df_summary.rename(columns={
-                            "End Point": "Checkpoint",
-                            "Speed (km/h)": "Speed",
-                            "Pace (min/km)": "Pace",
-                            "Segment Time": "Time",
-                            "VPI Raw (m/h)": "VPI",
-                            "DMI Raw (km/h)": "DMI",
-                        })
-
-                        df_summary = df_summary[[
-                            "Checkpoint", "Segment Distance (km)", "Elevation Gain (m)",
-                            "Elevation Loss (m)", "Average Slope (%)", "Speed", "Pace",
-                            "Rank", "Rest", "Time", "VPI", "DMI",
-                        ]]
+                        df_summary = build_summary_table(race_segments_df, df_segment_degradation, df_runner)
 
                         st.dataframe(df_summary, use_container_width=True, hide_index=True)
 
@@ -1735,6 +1755,132 @@ with tab_comparison:
                 f"{valid_dmi_diff.abs().mean():.2f} km/h",
                 help="Mean absolute difference between the estimated and real DMI across segments where both exist.",
             )
+
+# ---------------------------------------------
+# TAB 5: Top Runners (same unified summary table as 'Runner Metrics',
+# but for several bibs at once, ready to compare side by side)
+# ---------------------------------------------
+with tab_top:
+    st.header("🏆 Top Runners Comparison")
+    st.caption(
+        "Fetches the same unified summary table as 'Runner Metrics' for several bibs at "
+        "once (e.g. the top 10), so you can paste them side by side into Excel without "
+        "loading each runner one at a time."
+    )
+
+    available_races_top = st.session_state.get('saved_races', {})
+    if not available_races_top:
+        st.warning(
+            "⚠️ You haven't loaded any race yet. Go to the "
+            "**'🗺️ Race Analysis'** tab, select and analyze a race, and it "
+            "will show up here automatically."
+        )
+        selected_race_top = None
+    else:
+        selected_race_top = st.selectbox(
+            "Which race are these runners in?",
+            options=list(available_races_top.keys()),
+            key="top_race_selector",
+        )
+
+    st.markdown("---")
+    example_url = st.text_input(
+        "Example runner URL from this race (any bib works, just to identify the race/year)",
+        placeholder="https://live.utmb.world/aranbyutmb/2026/runners/5",
+        key="top_example_url",
+    )
+    bib_list_raw = st.text_area(
+        "Bib numbers to fetch (one per line or comma-separated, e.g. the top 10)",
+        placeholder="5\n12\n8\n23\n...",
+        key="top_bib_list",
+    )
+    fetch_top_button = st.button("🏆 Fetch all bibs", type="primary", use_container_width=True)
+
+    if fetch_top_button:
+        if not selected_race_top:
+            st.warning("Select a race above first.")
+        elif not example_url:
+            st.warning("Paste an example runner URL first (needed to identify the race/year).")
+        elif not bib_list_raw.strip():
+            st.warning("Enter at least one bib number.")
+        else:
+            tenant = extract_tenant(example_url)
+            if not tenant:
+                st.error(
+                    "❌ Couldn't identify the race/year from that URL. Make sure it has the "
+                    "format 'https://live.utmb.world/<race>/<year>/runners/<number>'."
+                )
+            else:
+                bibs = [b.strip() for b in re.split(r"[,\n]+", bib_list_raw) if b.strip()]
+                race_data_top = available_races_top[selected_race_top]
+                race_segments_df_top = race_data_top.get("df_segments")
+
+                if race_segments_df_top is None or race_segments_df_top.empty:
+                    st.warning(
+                        "⚠️ The selected race doesn't have checkpoints with km loaded yet. "
+                        "Go back to the 'Race Analysis' tab and load them first."
+                    )
+                else:
+                    results = {}
+                    errors = {}
+                    progress = st.progress(0.0, text="Fetching runners...")
+
+                    for i, bib in enumerate(bibs):
+                        try:
+                            runner_info_bib, df_runner_bib = fetch_runner_by_tenant_and_bib(tenant, bib)
+                            df_segment_degradation_bib = calculate_indices_by_segment(
+                                race_data_top["df"], race_segments_df_top, df_runner_bib
+                            )
+                            df_summary_bib = build_summary_table(
+                                race_segments_df_top, df_segment_degradation_bib, df_runner_bib
+                            )
+                            label = f"{runner_info_bib.get('Name') or ('Bib ' + str(bib))} (Bib {bib})"
+                            results[label] = df_summary_bib
+                        except Exception:
+                            errors[bib] = traceback.format_exc()
+                        progress.progress((i + 1) / len(bibs), text=f"Fetching runners... ({i + 1}/{len(bibs)})")
+
+                    progress.empty()
+
+                    if errors:
+                        with st.expander(f"⚠️ {len(errors)} bib(s) failed"):
+                            for bib, err in errors.items():
+                                st.markdown(f"**Bib {bib}:**")
+                                st.code(err, language="python")
+
+                    if not results:
+                        st.error("❌ Couldn't fetch any of the bibs entered.")
+                    else:
+                        st.success(f"✅ Fetched {len(results)} of {len(bibs)} runner(s).")
+
+                        for label, df_summary_bib in results.items():
+                            st.markdown(f"##### {label}")
+                            st.dataframe(df_summary_bib, use_container_width=True, hide_index=True)
+
+                        # --- Combined Excel download: every runner's table side by side ---
+                        excel_buffer = io.BytesIO()
+                        with pd.ExcelWriter(excel_buffer, engine="openpyxl") as writer:
+                            sheet_name = "Top Runners"
+                            worksheet_written = False
+                            startcol = 0
+                            for label, df_summary_bib in results.items():
+                                pd.DataFrame({label: []}).to_excel(
+                                    writer, sheet_name=sheet_name, startrow=0, startcol=startcol, index=False
+                                )
+                                df_summary_bib.to_excel(
+                                    writer, sheet_name=sheet_name, startrow=1, startcol=startcol, index=False
+                                )
+                                startcol += len(df_summary_bib.columns) + 1
+                                worksheet_written = True
+
+                        if worksheet_written:
+                            st.download_button(
+                                "📥 Download combined Excel (all runners side by side)",
+                                data=excel_buffer.getvalue(),
+                                file_name=f"{selected_race_top.replace(' ', '_')}_top_runners.xlsx",
+                                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                                use_container_width=True,
+                            )
 
 with tab_methodology:
     st.header("📖 Indices & Calculation Methodology")
