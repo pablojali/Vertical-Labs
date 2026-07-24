@@ -1905,8 +1905,8 @@ with tab_top:
                         st.markdown("### 📈 Position Progression")
                         st.caption(
                             "Each runner's rank at every checkpoint, connected across the race. "
-                            "The Y axis starts with the largest (worst) position at the top and "
-                            "ends at 1st place at the bottom, over the course's elevation profile."
+                            "The Y axis puts 1st place at the top, counting down to the largest "
+                            "(worst) position at the bottom."
                         )
 
                         checkpoint_to_km = dict(zip(
@@ -1940,8 +1940,9 @@ with tab_top:
                             hovermode="closest",
                             yaxis=dict(
                                 autorange=False,
-                                range=[0, worst_rank_seen + 1],
-                                dtick=1,
+                                range=[worst_rank_seen + 1, 0],
+                                dtick=2,
+                                showgrid=False,
                             ),
                         )
                         st.plotly_chart(fig_positions, use_container_width=True)
