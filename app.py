@@ -1857,30 +1857,48 @@ with tab_top:
                             st.markdown(f"##### {label}")
                             st.dataframe(df_summary_bib, use_container_width=True, hide_index=True)
 
-                        # --- Combined Excel download: every runner's table side by side ---
+                        # --- Combined Excel download: shared geometry once, then each
+                        # runner's own columns side by side (no repeated Checkpoint/
+                        # Segment Distance/Elevation/Slope columns per runner) ---
+                        shared_columns = [
+                            "Checkpoint", "Segment Distance (km)", "Elevation Gain (m)",
+                            "Elevation Loss (m)", "Average Slope (%)",
+                        ]
+                        runner_columns = ["Speed", "Pace", "Rank", "Rest", "Time", "VPI", "DMI"]
+
+                        first_df_summary = next(iter(results.values()))
+                        df_shared = first_df_summary[shared_columns]
+
                         excel_buffer = io.BytesIO()
                         with pd.ExcelWriter(excel_buffer, engine="openpyxl") as writer:
                             sheet_name = "Top Runners"
-                            worksheet_written = False
-                            startcol = 0
+
+                            # Shared geometry block (once)
+                            pd.DataFrame({"Race Segment Geometry": []}).to_excel(
+                                writer, sheet_name=sheet_name, startrow=0, startcol=0, index=False
+                            )
+                            df_shared.to_excel(
+                                writer, sheet_name=sheet_name, startrow=1, startcol=0, index=False
+                            )
+
+                            # One block per runner, right after the shared columns
+                            startcol = len(shared_columns) + 1
                             for label, df_summary_bib in results.items():
                                 pd.DataFrame({label: []}).to_excel(
                                     writer, sheet_name=sheet_name, startrow=0, startcol=startcol, index=False
                                 )
-                                df_summary_bib.to_excel(
+                                df_summary_bib[runner_columns].to_excel(
                                     writer, sheet_name=sheet_name, startrow=1, startcol=startcol, index=False
                                 )
-                                startcol += len(df_summary_bib.columns) + 1
-                                worksheet_written = True
+                                startcol += len(runner_columns) + 1
 
-                        if worksheet_written:
-                            st.download_button(
-                                "📥 Download combined Excel (all runners side by side)",
-                                data=excel_buffer.getvalue(),
-                                file_name=f"{selected_race_top.replace(' ', '_')}_top_runners.xlsx",
-                                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                                use_container_width=True,
-                            )
+                        st.download_button(
+                            "📥 Download combined Excel (shared geometry + each runner side by side)",
+                            data=excel_buffer.getvalue(),
+                            file_name=f"{selected_race_top.replace(' ', '_')}_top_runners.xlsx",
+                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                            use_container_width=True,
+                        )
 
 with tab_methodology:
     st.header("📖 Indices & Calculation Methodology")
